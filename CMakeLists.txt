@@ -15,5 +15,7 @@ set(CMAKE_CXX_COMPILER "${CHARMC_PATH}/bin/charmc")
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+option(USE_XPMEM "use XPMEM for IPC" OFF)
+
 add_subdirectory(src)
 add_subdirectory(demo)
