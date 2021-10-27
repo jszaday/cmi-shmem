@@ -118,9 +118,8 @@ void CmiInitIpcMetadata(char** argv) {
   CsvAccess(metadata_).reset(
       openMetadata_(kName, (void*)0x42424000, kDefaultSize));
   CmiAssert((bool)CsvAccess(metadata_));
-
-  CmiNodeAllBarrier();
-
+  // TODO ( identify which fn should be used here )
+  CmiBarrier();
   // NOTE ( this has to match across all PEs on a node )
   DEBUGP(
       ("%d> meta is at address %p\n", CmiMyPe(), CsvAccess(metadata_).get()));
