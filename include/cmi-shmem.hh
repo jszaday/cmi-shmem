@@ -6,8 +6,6 @@
 
 void CmiInitIpcMetadata(char** argv);
 
-#define CMI_HAS_XPMEM 0
-
 // TODO ( generate better names than src/dst )
 struct CmiIpcBlock {
   // "home" rank of the block
@@ -21,9 +19,9 @@ struct CmiIpcBlock {
   std::size_t size;
 #if CMI_HAS_XPMEM
   std::atomic<bool> free;
-  bool cached;
+  CmiIpcBlock* cached;
   CmiIpcBlock(std::size_t size_)
-      : next(nullptr), size(size_), free(false), cached(false) {}
+      : orig(this), next(nullptr), size(size_), free(true), cached(nullptr) {}
 #else
   CmiIpcBlock(std::size_t size_) : next(nullptr), size(size_) {}
 #endif

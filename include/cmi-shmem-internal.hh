@@ -42,13 +42,16 @@ inline static CmiIpcBlock* popBlock_(std::atomic<CmiIpcBlock*>& head) {
 }
 
 inline static bool pushBlock_(std::atomic<CmiIpcBlock*>& head,
-                              CmiIpcBlock* block) {
+                              CmiIpcBlock* block,
+                              CmiIpcBlock* value = nullptr) {
+  if (value == nullptr) value = block;
+  CmiAssert(value != nullptr);
   auto* prev = head.exchange(nullptr, std::memory_order_acquire);
   if (prev == nullptr) {
     return false;
   }
   block->next = prev;
-  auto* check = head.exchange(block, std::memory_order_release);
+  auto* check = head.exchange(value, std::memory_order_release);
   CmiAssert(check == nullptr);
   return true;
 }
