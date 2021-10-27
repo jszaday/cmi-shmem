@@ -1,7 +1,7 @@
 # CMI SHMEM Module
 
 Goal:
-- Enable fast IPC communication with SHMEM or XPMEM.
+- Enable fast IPC communication with POSIX SHM (SHMEM) or XPMEM.
 
 Currently in early stages. Lots of work remains, e.g.:
 - Enable expanding SHMEM region when it runs out.
