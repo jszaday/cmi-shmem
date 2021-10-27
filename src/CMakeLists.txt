@@ -4,4 +4,5 @@ target_include_directories(
     cmi-shmem PUBLIC "${CMAKE_BINARY_DIR}/include"
 )
 
+target_compile_options (cmi-shmem PRIVATE -g3)
 target_include_directories (cmi-shmem PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
