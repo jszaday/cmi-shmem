@@ -181,6 +181,17 @@ static CmiIpcBlock* allocBlock_(ipc_metadata_* meta, std::size_t size) {
   }
 }
 
+CmiIpcBlock* CmiIsBlock(void* addr) {
+  auto* meta = CsvAccess(metadata_).get();
+  auto* start = (char*)meta + sizeof(ipc_metadata_);
+  auto* end = meta->max;
+  if (start < addr && addr < end) {
+    return (CmiIpcBlock*)((char*)addr - sizeof(CmiIpcBlock));
+  } else {
+    return nullptr;
+  }
+}
+
 CmiIpcBlock* CmiAllocBlock(int pe, std::size_t reqd) {
   auto myPe = CmiMyPe();
   auto myRank = CmiPhysicalRank(myPe);

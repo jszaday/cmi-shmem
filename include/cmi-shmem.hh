@@ -27,7 +27,10 @@ struct CmiIpcBlock {
 #else
   CmiIpcBlock(std::size_t size_) : next(nullptr), size(size_) {}
 #endif
+  // TODO ( add padding to ensure alignment! )
 };
+
+CmiIpcBlock* CmiIsBlock(void*);
 
 CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size);
 

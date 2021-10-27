@@ -35,6 +35,8 @@ void test_init(int argc, char** argv) {
 
     auto* buf = ((char*)blk + sizeof(CmiIpcBlock));
     sprintf(buf, "(hello %d from %d!)", imsg, pe);
+    // check whether the address 'belongs' to a block
+    CmiAssert(blk == CmiIsBlock(buf));
 
     // cache before we push to retain translation
     CmiCacheBlock(blk);
