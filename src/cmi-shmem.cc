@@ -27,11 +27,7 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     1048576,   2097152,   4194304,   8388608,   16777216, 33554432, 67108864,
     134217728, 268435456, 536870912, 1073741824};
 
-struct ipc_queue_ {
-  const int node;
-  std::atomic<CmiIpcBlock*> head;
-  ipc_queue_(int node_) : node(node_), head((CmiIpcBlock*)kTail) {}
-};
+using ipc_queue_ = std::atomic<CmiIpcBlock*>;
 
 struct ipc_metadata_ {
   std::array<std::atomic<CmiIpcBlock*>, kNumCutOffPoints> free;
@@ -58,8 +54,8 @@ struct ipc_metadata_deleter_ {
 using ipc_metadata_ptr_ = std::unique_ptr<ipc_metadata_, ipc_metadata_deleter_>;
 CsvStaticDeclare(ipc_metadata_ptr_, metadata_);
 
-static ipc_metadata_* open_metadata_(const char* name, void* addr,
-                                     std::size_t size) {
+static ipc_metadata_* openMetadata_(const char* name, void* addr,
+                                    std::size_t size) {
   auto fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0666);
   auto init = fd >= 0;
 
@@ -88,7 +84,7 @@ static ipc_metadata_* open_metadata_(const char* name, void* addr,
 
     meta->queues = (ipc_queue_*)res;
     for (auto rank = 0; rank < nPes; rank++) {
-      new (&meta->queues[rank]) ipc_queue_(rank);
+      new (&meta->queues[rank]) ipc_queue_((CmiIpcBlock*)kTail);
     }
 
     auto* heap = (char*)meta + sizeof(ipc_metadata_);
@@ -114,7 +110,7 @@ void CmiInitIpcMetadata(char** argv) {
   CsvInitialize(ipc_metadata_ptr_, metadata_);
   // TODO ( figure out a better way to pick size/magic number )
   CsvAccess(metadata_).reset(
-      open_metadata_(kName, (void*)0x42424000, kDefaultSize));
+      openMetadata_(kName, (void*)0x42424000, kDefaultSize));
   CmiAssert((bool)CsvAccess(metadata_));
 
   CmiNodeAllBarrier();
@@ -135,8 +131,7 @@ inline std::size_t whichBin_(std::size_t size) {
   return bin;
 }
 
-static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t bin) {
-  auto& head = meta->free[bin];
+inline static CmiIpcBlock* popBlock_(std::atomic<CmiIpcBlock*>& head) {
   auto* prev = head.exchange(nullptr, std::memory_order_acquire);
   if (prev == nullptr) {
     return nullptr;
@@ -146,6 +141,22 @@ static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t bin) {
   auto* check = head.exchange(next, std::memory_order_release);
   CmiAssert(check == nullptr);
   return nil ? nullptr : prev;
+}
+
+inline static bool pushBlock_(std::atomic<CmiIpcBlock*>& head,
+                              CmiIpcBlock* block) {
+  auto* prev = head.exchange(nullptr, std::memory_order_acquire);
+  if (prev == nullptr) {
+    return false;
+  }
+  block->next = prev;
+  auto* check = head.exchange(block, std::memory_order_release);
+  CmiAssert(check == nullptr);
+  return true;
+}
+
+static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t bin) {
+  return popBlock_(meta->free[bin]);
 }
 
 static CmiIpcBlock* allocBlock_(ipc_metadata_* meta, std::size_t size) {
@@ -202,15 +213,8 @@ bool CmiPushBlock(CmiIpcBlock* blk) {
   auto myRank = CmiPhysicalRank(myPe);
   auto* meta = CsvAccess(metadata_).get();
   CmiAssert((meta != nullptr) && (myRank == blk->dst));
-  auto* queue = &(meta->queues[blk->src]);
-  auto* prev = queue->head.exchange(nullptr, std::memory_order_acquire);
-  if (prev == nullptr) {
-    return false;
-  }
-  blk->next = prev;
-  auto* check = queue->head.exchange(blk, std::memory_order_release);
-  CmiAssert(check == nullptr);
-  return true;
+  auto& queue = meta->queues[blk->src];
+  return pushBlock_(queue, blk);
 }
 
 CmiIpcBlock* CmiPopBlock(void) {
@@ -218,16 +222,8 @@ CmiIpcBlock* CmiPopBlock(void) {
   auto myRank = CmiPhysicalRank(myPe);
   auto* meta = CsvAccess(metadata_).get();
   CmiAssert(meta != nullptr);
-  auto* queue = &(meta->queues[myRank]);
-  auto* prev = queue->head.exchange(nullptr, std::memory_order_acquire);
-  if (prev == nullptr) {
-    return nullptr;
-  }
-  auto nil = prev == (CmiIpcBlock*)kTail;
-  auto* next = nil ? prev : prev->next;
-  auto* check = queue->head.exchange(next, std::memory_order_release);
-  CmiAssert(check == nullptr);
-  return nil ? nullptr : prev;
+  auto& queue = meta->queues[myRank];
+  return popBlock_(queue);
 }
 
 void CmiCacheBlock(CmiIpcBlock*) { return; }
@@ -237,10 +233,6 @@ void CmiFreeBlock(CmiIpcBlock* blk) {
   auto* meta = CsvAccess(metadata_).get();
   CmiAssert((meta != nullptr) && (bin < kNumCutOffPoints));
   auto& head = meta->free[bin];
-  CmiIpcBlock* prev;
-  while ((prev = head.exchange(nullptr, std::memory_order_acquire)) == nullptr)
+  while (!pushBlock_(head, blk))
     ;
-  blk->next = prev;
-  auto* check = head.exchange(blk, std::memory_order_release);
-  CmiAssert(check == nullptr);
 }
