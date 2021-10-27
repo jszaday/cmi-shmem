@@ -13,7 +13,7 @@
 #include <limits>
 #include <memory>
 
-#define DEBUGP(x) /** CmiPrintf x; */
+#define DEBUGP(x) /* CmiPrintf x; */
 
 const char* kName = "cmi_shmem_meta_";
 const std::size_t kDefaultSize = 16384;
@@ -58,42 +58,48 @@ static ipc_metadata_* openMetadata_(const char* name, void* addr,
                                     std::size_t size) {
   auto fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0666);
   auto init = fd >= 0;
-
+  // if we're the first process to init the segment
   if (init) {
+    // truncate it to the correct size
     auto status = ftruncate(fd, size);
     CmiAssert(status >= 0);
   } else {
     fd = shm_open(name, O_RDWR, 0666);
     CmiAssert(fd >= 0);
   }
-
+  // map the shm segment to the specified address
   auto* res =
       (char*)mmap(addr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   CmiAssert(res != MAP_FAILED && res == addr);
-
-  auto mine = CmiPhysicalNodeID(CmiMyPe());
+  // various physical properties of the current PE
+  auto pe = CmiMyPe();
+  auto mine = CmiPhysicalNodeID(pe);
   auto nPes = CmiNumPesOnPhysicalNode(mine);
+  auto first = CmiGetFirstPeOnPhysicalNode(mine);
+  // determine all the offsets for the metadata
   auto metaOffset = nPes * sizeof(ipc_queue_);
   metaOffset += (metaOffset % alignof(ipc_metadata_));
   auto* meta = (ipc_metadata_*)(res + metaOffset);
   CmiAssert(((std::uintptr_t)res % alignof(ipc_queue_)) == 0);
   CmiAssert((((std::uintptr_t)meta % alignof(ipc_metadata_)) == 0));
-
-  if (init) {
+  // if we're the node's first PE
+  if (pe == first) {
+    // zero the metadata's segment of memory
+    std::fill(res, res + metaOffset + sizeof(ipc_metadata_), '\0');
+    // initialize the metadata in place
     new (meta) ipc_metadata_(fd);
-
+    // initialize all the queues (to empty lists)
     meta->queues = (ipc_queue_*)res;
     for (auto rank = 0; rank < nPes; rank++) {
       new (&meta->queues[rank]) ipc_queue_((CmiIpcBlock*)kTail);
     }
-
+    // set the bounds of the heap
     auto* heap = (char*)meta + sizeof(ipc_metadata_);
     meta->max = res + size;
     meta->heap.store(heap);
-
-    DEBUGP(("%d> pool has %ld free bytes\n", CmiMyPe(),
+    DEBUGP(("%d> pool has %ld free bytes\n", pe,
             (std::intptr_t)(meta->max - heap)));
-
+    // initialize all the free-lists (to empty lists)
     for (auto pt = 0; pt < kNumCutOffPoints; pt++) {
       meta->free[pt].store((CmiIpcBlock*)kTail);
     }
