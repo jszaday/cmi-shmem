@@ -95,15 +95,20 @@ void CmiInitIpcMetadata(char** argv) {
   CmiNodeAllBarrier();
 
   CsvInitialize(ipc_metadata_ptr_, metadata_);
+  // TODO ( figure out a better way to pick size/magic number )
   CsvAccess(metadata_).reset(open_metadata_(kName, (void*)0x42424000, 4096));
   CmiAssert((bool)CsvAccess(metadata_));
 
   CmiNodeAllBarrier();
 
+  // NOTE ( this has to match across all PEs on a node )
   CmiPrintf("%d> meta is at address %p\n", CmiMyPe(),
             CsvAccess(metadata_).get());
 }
 
+/* TODO ( merely the beginnings of the allocator described here: )
+ *      ( http://dmitrysoshnikov.com/compilers/writing-a-memory-allocator )
+ */
 static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t size) {
   auto* head = meta->head.load();
 
@@ -200,9 +205,28 @@ CmiIpcBlock* CmiPopBlock(void) {
   return nil ? nullptr : prev;
 }
 
-void CmiCacheBlock(CmiIpcBlock* blk) {}
+void CmiCacheBlock(CmiIpcBlock* blk) {
+  if (!blk->cached) {
+    auto* meta = CsvAccess(metadata_).get();
+    CmiIpcBlock* prev;
+    while ((prev = meta->head.exchange(nullptr, std::memory_order_acquire)) ==
+           nullptr)
+      ;
+    blk->next = prev;
+    blk->cached = true;
+    auto* check = meta->head.exchange(blk, std::memory_order_release);
+    CmiAssert(check == nullptr);
+  }
+}
 
-bool CmiFreeBlock(CmiIpcBlock* blk) {
+void CmiFreeBlock(CmiIpcBlock* blk) {
+#if !CMI_HAS_XPMEM
+  // on non-XPMEM implementations, free'ing always 'caches' the block
+  CmiCacheBlock(blk);
+#endif
   auto old = blk->free.exchange(true, std::memory_order_release);
-  CmiAssert(old == false);
+  CmiAssertMsg(old == false, "double free?");
+#if CMI_HAS_XPMEM
+  // TODO ( if block hasn't been cached, shred it )
+#endif
 }
