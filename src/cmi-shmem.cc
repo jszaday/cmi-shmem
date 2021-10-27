@@ -110,7 +110,12 @@ void CmiInitIpcMetadata(char** argv) {
  *      ( http://dmitrysoshnikov.com/compilers/writing-a-memory-allocator )
  */
 static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t size) {
+  // TODO ( this is unreliable -- need a better way to access it! )
   auto* head = meta->head.load();
+  if (head == nullptr) {
+    // someone else is amidst a replacement operation
+    return nullptr;
+  }
 
   while (head != (CmiIpcBlock*)kTail) {
     if (head->size >= size) {

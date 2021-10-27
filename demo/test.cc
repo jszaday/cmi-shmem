@@ -19,28 +19,36 @@ void test_init(int argc, char** argv) {
   auto rank = CmiPhysicalRank(pe);
   auto node = CmiPhysicalNodeID(pe);
   auto nPes = CmiNumPesOnPhysicalNode(node);
+  auto nMsgs = 16;
 
-  auto peer = (rank + 1) % nPes;
+  for (auto imsg = 0; imsg < nMsgs; imsg++) {
+    auto peer = (rank + imsg + 1) % nPes;
+    if (peer == pe) {
+      continue;
+    }
 
-  auto len = snprintf(NULL, 0, "(hello from %d!)", pe);
+    auto len = snprintf(NULL, 0, "(hello %d from %d!)", imsg, pe);
 
-  CmiIpcBlock* blk;
-  while ((blk = CmiAllocBlock(peer, len)) == nullptr)
-    ;
+    CmiIpcBlock* blk;
+    while ((blk = CmiAllocBlock(peer, len)) == nullptr)
+      ;
 
-  auto* buf = ((char*)blk + sizeof(CmiIpcBlock));
-  sprintf(buf, "(hello from %d!)", pe);
+    auto* buf = ((char*)blk + sizeof(CmiIpcBlock));
+    sprintf(buf, "(hello %d from %d!)", imsg, pe);
 
-  CmiCacheBlock(blk);
-  while (!CmiPushBlock(blk))
-    ;
+    // cache before we push to retain translation
+    CmiCacheBlock(blk);
+    // then push onto the receiver's queue
+    while (!CmiPushBlock(blk))
+      ;
 
-  while ((blk = CmiPopBlock()) == nullptr)
-    ;
+    while ((blk = CmiPopBlock()) == nullptr)
+      ;
 
-  CmiPrintf("%d> got message: %s\n", pe, (char*)blk + sizeof(CmiIpcBlock));
+    CmiPrintf("%d> got message: %s\n", pe, (char*)blk + sizeof(CmiIpcBlock));
 
-  CmiFreeBlock(blk);
+    CmiFreeBlock(blk);
+  }
 
   CpvInitialize(int, handle_exit);
   CpvAccess(handle_exit) = CmiRegisterHandler(exit_handler);
