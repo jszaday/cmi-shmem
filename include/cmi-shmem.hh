@@ -19,10 +19,14 @@ struct CmiIpcBlock {
   int dst;
   CmiIpcBlock* next;
   std::size_t size;
+#if CMI_HAS_XPMEM
   std::atomic<bool> free;
   bool cached;
   CmiIpcBlock(std::size_t size_)
       : next(nullptr), size(size_), free(false), cached(false) {}
+#else
+  CmiIpcBlock(std::size_t size_) : next(nullptr), size(size_) {}
+#endif
 };
 
 CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size);

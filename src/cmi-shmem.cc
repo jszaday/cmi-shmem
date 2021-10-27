@@ -13,8 +13,19 @@
 #include <limits>
 #include <memory>
 
+#define DEBUGP(x) /** CmiPrintf x; */
+
 const char* kName = "cmi_shmem_meta_";
+const std::size_t kDefaultSize = 16384;
+
 static constexpr auto kTail = std::numeric_limits<std::uintptr_t>::max();
+
+constexpr std::size_t kNumCutOffPoints = 25;
+const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
+    64,        128,       256,       512,       1024,     2048,     4096,
+    8192,      16384,     32768,     65536,     131072,   262144,   524288,
+    1048576,   2097152,   4194304,   8388608,   16777216, 33554432, 67108864,
+    134217728, 268435456, 536870912, 1073741824};
 
 struct ipc_queue_ {
   const int node;
@@ -23,7 +34,7 @@ struct ipc_queue_ {
 };
 
 struct ipc_metadata_ {
-  std::atomic<CmiIpcBlock*> head;
+  std::array<std::atomic<CmiIpcBlock*>, kNumCutOffPoints> free;
   std::atomic<char*> heap;
   ipc_queue_* queues;
   char* max;
@@ -37,7 +48,7 @@ struct ipc_metadata_deleter_ {
   inline void operator()(ipc_metadata_* meta) {
     if (meta->node == CmiPhysicalRank(CmiMyPe())) {
       auto fd = meta->fd;
-      auto status = munmap((void*)meta->queues, 4096);
+      auto status = munmap((void*)meta->queues, kDefaultSize);
       status = status && close(fd);
       shm_unlink(kName);
     }
@@ -69,20 +80,26 @@ static ipc_metadata_* open_metadata_(const char* name, void* addr,
   auto metaOffset = nPes * sizeof(ipc_queue_);
   metaOffset += (metaOffset % alignof(ipc_metadata_));
   auto* meta = (ipc_metadata_*)(res + metaOffset);
+  CmiAssert(((std::uintptr_t)res % alignof(ipc_queue_)) == 0);
   CmiAssert((((std::uintptr_t)meta % alignof(ipc_metadata_)) == 0));
 
   if (init) {
     new (meta) ipc_metadata_(fd);
 
-    auto* heap = (char*)(meta + sizeof(ipc_metadata_));
-    meta->max = heap + size;
     meta->queues = (ipc_queue_*)res;
-    meta->head.store((CmiIpcBlock*)kTail);
-    meta->heap.store(heap);
-
-    CmiAssert(((std::uintptr_t)meta % alignof(ipc_queue_)) == 0);
     for (auto rank = 0; rank < nPes; rank++) {
       new (&meta->queues[rank]) ipc_queue_(rank);
+    }
+
+    auto* heap = (char*)meta + sizeof(ipc_metadata_);
+    meta->max = res + size;
+    meta->heap.store(heap);
+
+    DEBUGP(("%d> pool has %ld free bytes\n", CmiMyPe(),
+            (std::intptr_t)(meta->max - heap)));
+
+    for (auto pt = 0; pt < kNumCutOffPoints; pt++) {
+      meta->free[pt].store((CmiIpcBlock*)kTail);
     }
   }
 
@@ -96,41 +113,39 @@ void CmiInitIpcMetadata(char** argv) {
 
   CsvInitialize(ipc_metadata_ptr_, metadata_);
   // TODO ( figure out a better way to pick size/magic number )
-  CsvAccess(metadata_).reset(open_metadata_(kName, (void*)0x42424000, 4096));
+  CsvAccess(metadata_).reset(
+      open_metadata_(kName, (void*)0x42424000, kDefaultSize));
   CmiAssert((bool)CsvAccess(metadata_));
 
   CmiNodeAllBarrier();
 
   // NOTE ( this has to match across all PEs on a node )
-  CmiPrintf("%d> meta is at address %p\n", CmiMyPe(),
-            CsvAccess(metadata_).get());
+  DEBUGP(
+      ("%d> meta is at address %p\n", CmiMyPe(), CsvAccess(metadata_).get()));
 }
 
-/* TODO ( merely the beginnings of the allocator described here: )
- *      ( http://dmitrysoshnikov.com/compilers/writing-a-memory-allocator )
- */
-static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t size) {
-  // TODO ( this is unreliable -- need a better way to access it! )
-  auto* head = meta->head.load();
-  if (head == nullptr) {
-    // someone else is amidst a replacement operation
+// TODO ( find a better way to do this )
+inline std::size_t whichBin_(std::size_t size) {
+  std::size_t bin;
+  for (bin = 0; bin < kNumCutOffPoints; bin++) {
+    if (size <= kCutOffPoints[bin]) {
+      break;
+    }
+  }
+  return bin;
+}
+
+static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t bin) {
+  auto& head = meta->free[bin];
+  auto* prev = head.exchange(nullptr, std::memory_order_acquire);
+  if (prev == nullptr) {
     return nullptr;
   }
-
-  while (head != (CmiIpcBlock*)kTail) {
-    if (head->size >= size) {
-      // check whether the block is free by trying to acquire it
-      auto status = head->free.exchange(false, std::memory_order_acquire);
-      // if we succeed, we can use this block!
-      if (status) {
-        return head;
-      }
-    }
-    // move onto the next block
-    head = head->next;
-  }
-
-  return nullptr;
+  auto nil = prev == (CmiIpcBlock*)kTail;
+  auto* next = nil ? prev : prev->next;
+  auto* check = head.exchange(next, std::memory_order_release);
+  CmiAssert(check == nullptr);
+  return nil ? nullptr : prev;
 }
 
 static CmiIpcBlock* allocBlock_(ipc_metadata_* meta, std::size_t size) {
@@ -150,7 +165,7 @@ static CmiIpcBlock* allocBlock_(ipc_metadata_* meta, std::size_t size) {
   }
 }
 
-CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
+CmiIpcBlock* CmiAllocBlock(int pe, std::size_t reqd) {
   auto myPe = CmiMyPe();
   auto myRank = CmiPhysicalRank(myPe);
   auto myNode = CmiPhysicalNodeID(myPe);
@@ -158,17 +173,22 @@ CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
   auto theirNode = CmiPhysicalNodeID(pe);
   CmiAssert((myRank != theirRank) && (myNode == theirNode));
 
+  auto bin = whichBin_(reqd);
+  if (bin >= kNumCutOffPoints) {
+    return nullptr;
+  }
+  auto size = kCutOffPoints[bin];
+
   auto* meta = CsvAccess(metadata_).get();
   CmiAssert(meta != nullptr);
-  auto* block = findBlock_(meta, size);
+  auto* block = findBlock_(meta, bin);
 
   if (block == nullptr) {
     block = allocBlock_(meta, size);
+    if (block == nullptr) {
+      return nullptr;
+    }
     new (block) CmiIpcBlock(size);
-  }
-
-  if (block == nullptr) {
-    return nullptr;
   }
 
   block->src = theirRank;
@@ -210,28 +230,17 @@ CmiIpcBlock* CmiPopBlock(void) {
   return nil ? nullptr : prev;
 }
 
-void CmiCacheBlock(CmiIpcBlock* blk) {
-  if (!blk->cached) {
-    auto* meta = CsvAccess(metadata_).get();
-    CmiIpcBlock* prev;
-    while ((prev = meta->head.exchange(nullptr, std::memory_order_acquire)) ==
-           nullptr)
-      ;
-    blk->next = prev;
-    blk->cached = true;
-    auto* check = meta->head.exchange(blk, std::memory_order_release);
-    CmiAssert(check == nullptr);
-  }
-}
+void CmiCacheBlock(CmiIpcBlock*) { return; }
 
 void CmiFreeBlock(CmiIpcBlock* blk) {
-#if !CMI_HAS_XPMEM
-  // on non-XPMEM implementations, free'ing always 'caches' the block
-  CmiCacheBlock(blk);
-#endif
-  auto old = blk->free.exchange(true, std::memory_order_release);
-  CmiAssertMsg(old == false, "double free?");
-#if CMI_HAS_XPMEM
-  // TODO ( if block hasn't been cached, shred it )
-#endif
+  auto bin = whichBin_(blk->size);
+  auto* meta = CsvAccess(metadata_).get();
+  CmiAssert((meta != nullptr) && (bin < kNumCutOffPoints));
+  auto& head = meta->free[bin];
+  CmiIpcBlock* prev;
+  while ((prev = head.exchange(nullptr, std::memory_order_acquire)) == nullptr)
+    ;
+  blk->next = prev;
+  auto* check = head.exchange(blk, std::memory_order_release);
+  CmiAssert(check == nullptr);
 }
