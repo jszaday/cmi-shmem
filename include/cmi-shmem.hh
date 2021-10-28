@@ -4,8 +4,6 @@
 #include <atomic>
 #include <cstdint>
 
-void CmiInitIpcMetadata(char** argv, CthThread th);
-
 #define CMK_IPC_BLOCK_FIELDS \
   int src;                   \
   int dst;                   \
@@ -45,29 +43,32 @@ struct CmiIpcBlock {
   // TODO ( add padding to ensure alignment! )
 };
 
+void CmiInitIpcMetadata(char** argv, CthThread th);
 void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP);
 
-CmiIpcBlock* CmiIsBlock(void*);
-
-CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size);
-
-void* CmiAllocBlockMsg(int pe, std::size_t size);
-
 bool CmiPushBlock(CmiIpcBlock*);
-
 CmiIpcBlock* CmiPopBlock(void);
 
+CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size);
 void CmiFreeBlock(CmiIpcBlock*);
 
 void CmiCacheBlock(CmiIpcBlock*);
 
-inline CmiIpcBlock* CmiMsgToBlock(void* msg) {
-  return CmiIsBlock((char*)msg - sizeof(CmiChunkHeader));
-}
+// identifies whether a void* is the payload of a block
+CmiIpcBlock* CmiIsBlock(void*);
 
+// if (init) is true -- initializes the
+// memory segment for use as a message
+void* CmiBlockToMsg(CmiIpcBlock*, bool init);
+
+// equivalent to calling above with (init = false)
 inline void* CmiBlockToMsg(CmiIpcBlock* block) {
   auto res = (char*)block + sizeof(CmiIpcBlock) + sizeof(CmiChunkHeader);
   return (void*)res;
+}
+
+inline CmiIpcBlock* CmiMsgToBlock(void* msg) {
+  return CmiIsBlock((char*)msg - sizeof(CmiChunkHeader));
 }
 
 #endif

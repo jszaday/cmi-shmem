@@ -113,7 +113,9 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   // NOTE ( this has to match across all PEs on a node )
   DEBUGP(
       ("%d> meta is at address %p\n", CmiMyPe(), CsvAccess(metadata_).get()));
-
+  if (CmiMyPe() == 0) {
+    CmiPrintf("CMI> posix shm pool ready.\n");
+  }
   // resume the callback
   if (th) CthAwaken(th);
 }

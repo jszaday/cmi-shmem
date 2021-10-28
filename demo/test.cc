@@ -16,6 +16,7 @@ inline char* test_msg_::payload(void) {
 void block_handler(void* msg) {
   auto* tmsg = (test_msg_*)msg;
   CmiPrintf("%d> got message: %s\n", CmiMyPe(), tmsg->payload());
+  // TODO ( determine how to support: CmiFree(msg) )
   auto* blk = CmiMsgToBlock(msg);
   CmiAssert(blk != nullptr);
   CmiFreeBlock(blk);
@@ -35,19 +36,20 @@ void test_thread(void*) {
     }
 
     auto len = snprintf(NULL, 0, "(hello %d from %d!)", imsg, pe);
-    auto totalSize = len + sizeof(test_msg_);
+    auto totalSize = len + sizeof(CmiChunkHeader) + sizeof(test_msg_);
     // allocate a block message from the IPC pool
-    test_msg_* msg;
-    while ((msg = (test_msg_*)CmiAllocBlockMsg(peer, totalSize)) == nullptr)
+    CmiIpcBlock* block;
+    while ((block = CmiAllocBlock(peer, totalSize)) == nullptr)
       ;
+    // actively convert the block to a message
+    auto* msg = (test_msg_*)CmiBlockToMsg(block, true);
     // prepare its payload/set the handler
     sprintf(msg->payload(), "(hello %d from %d!)", imsg, pe);
     CmiSetHandler(msg, CpvAccess(handle_block));
     // cache before we push to retain translation
-    auto* blk = CmiMsgToBlock(msg);
-    CmiCacheBlock(blk);
+    CmiCacheBlock(block);
     // then push it onto the receiver's queue
-    while (!CmiPushBlock(blk))
+    while (!CmiPushBlock(block))
       ;
     // yield to allow the handler to get invoked
     unsigned int prio = 1;  // LOW PRIORITY

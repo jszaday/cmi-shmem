@@ -4,19 +4,16 @@
 #include "cmi-shm.cc"
 #endif
 
-void* CmiAllocBlockMsg(int pe, std::size_t size) {
-  constexpr auto header = sizeof(CmiChunkHeader);
-  auto* block = CmiAllocBlock(pe, size + header);
-  if (block == nullptr) {
-    return nullptr;
-  } else {
-    auto* res = (char*)block + header + sizeof(CmiIpcBlock);
-    CmiInitMsgHeader(res, size);
-    CmiAssert(((uintptr_t)res % ALIGN_BYTES) == 0);
-    SIZEFIELD(res) = size;
-    REFFIELDSET(res, 1);
-    return (void*)res;
+void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
+  auto* msg = CmiBlockToMsg(block);
+  if (init) {
+    // NOTE ( this is identical to code in CmiAlloc )
+    CmiAssert(((uintptr_t)msg % ALIGN_BYTES) == 0);
+    CmiInitMsgHeader(msg, block->size);
+    SIZEFIELD(msg) = block->size;
+    REFFIELDSET(msg, 1);
   }
+  return msg;
 }
 
 static void CmiHandleBlock_(void*, double) {
