@@ -1,3 +1,4 @@
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +83,8 @@ static ipc_metadata_* openMetadata_(const char* name, void* addr,
     }
     // set the bounds of the heap
     auto* heap = (char*)meta + sizeof(ipc_metadata_);
+    // align the start of the heap to ALIGN_BYTES
+    heap += (uintptr_t)heap % ALIGN_BYTES;
     meta->max = res + size;
     meta->heap.store(heap);
     DEBUGP(("%d> pool has %ld free bytes\n", pe,
@@ -95,7 +98,7 @@ static ipc_metadata_* openMetadata_(const char* name, void* addr,
   return meta;
 }
 
-void CmiInitIpcMetadata(char** argv) {
+void CmiInitIpcMetadata(char** argv, CthThread th) {
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
   CmiNodeAllBarrier();
@@ -110,6 +113,9 @@ void CmiInitIpcMetadata(char** argv) {
   // NOTE ( this has to match across all PEs on a node )
   DEBUGP(
       ("%d> meta is at address %p\n", CmiMyPe(), CsvAccess(metadata_).get()));
+
+  // resume the callback
+  if (th) CthAwaken(th);
 }
 
 static CmiIpcBlock* findBlock_(ipc_metadata_* meta, std::size_t bin) {
