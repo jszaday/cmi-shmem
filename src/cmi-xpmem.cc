@@ -276,6 +276,9 @@ static void handleInitialize_(void* msg) {
   // if we received messages from all our peers:
   if ((meta->nPeers == meta->shared.size()) && meta->init) {
     // resume the sleeping thread
+    if (CmiMyPe() == 0) {
+      CmiPrintf("CMI> xpmem ipc pool ready.\n");
+    }
     CthAwaken(meta->init);
   }
 }
@@ -291,8 +294,9 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   meta->init = th;
 
   // TODO ( determine how to seed pool! )
+  // NOTE ( if the demo hangs -- init size may be wrong )
   auto nInitial = 16;
-  auto initialSize = 64;
+  auto initialSize = 128;
   auto bin = whichBin_(initialSize);
   auto* shared = meta->shared[meta->mine];
   for (auto i = 0; i < nInitial; i++) {
