@@ -19,8 +19,11 @@ extern "C" {
 struct ipc_shared_ {
   std::array<std::atomic<CmiIpcBlock*>, kNumCutOffPoints> free;
   std::atomic<CmiIpcBlock*> queue;
+  std::atomic<std::uintptr_t> heap;
+  std::uintptr_t max;
 
-  ipc_shared_(void) : queue((CmiIpcBlock*)kTail) {
+  ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
+  : queue((CmiIpcBlock*)kTail), heap(begin), max(end) {
     for (auto& f : this->free) {
       f.store((CmiIpcBlock*)kTail);
     }
@@ -34,6 +37,17 @@ struct init_msg_ {
   ipc_shared_* shared;
 };
 
+inline static ipc_shared_* makeIpcShared_(void) {
+  auto& size = CpvAccess(kSegmentSize);
+  constexpr auto shsize = sizeof(ipc_shared_);
+  auto* shared = (ipc_shared_*)(::operator new(shsize + size));
+  auto begin = (std::uintptr_t)(shsize + (shsize % ALIGN_BYTES));
+  CmiAssert(begin != 0x0);
+  auto end = begin + size;
+  new (shared) ipc_shared_(begin, end);
+  return shared;
+}
+
 struct ipc_metadata_ {
   // maps ranks to segments
   std::map<int, xpmem_segid_t> segments;
@@ -41,10 +55,6 @@ struct ipc_metadata_ {
   std::map<xpmem_segid_t, xpmem_apid_t> instances;
   // maps ranks to shared segments
   std::map<int, ipc_shared_*> shared;
-  // maps ranks to (cached) blocks
-  // TODO ( the cache is _NOT_ SMP safe )
-  // TODO ( take sizes into consideration )
-  std::map<int, CmiIpcBlock*> cache;
   // our physical rank
   int mine;
   // number of physical peers
@@ -54,33 +64,12 @@ struct ipc_metadata_ {
 
   ipc_metadata_(void) : mine(CmiPhysicalRank(CmiMyPe())) {
     // initialize our ipc shared region
-    this->shared[mine] = new ipc_shared_();
+    this->shared[mine] = makeIpcShared_();
   }
 
   void put_segment(int rank, const xpmem_segid_t& segid) {
     auto ins = this->segments.emplace(rank, segid);
     CmiAssert(ins.second);
-  }
-
-  CmiIpcBlock* get_cache(int rank) const {
-    auto search = this->cache.find(rank);
-    if (search == std::end(this->cache)) {
-      return (CmiIpcBlock*)kTail;
-    } else {
-      return search->second;
-    }
-  }
-
-  CmiIpcBlock* seek_cached(int rank, std::size_t size) {
-    auto* block = this->get_cache(rank);
-    while (block != (CmiIpcBlock*)kTail) {
-      if (block->size >= size && block->free.load(std::memory_order_relaxed)) {
-        break;
-      } else {
-        block = block->cached;
-      }
-    }
-    return (block == (CmiIpcBlock*)kTail) ? nullptr : block;
   }
 
   xpmem_segid_t get_segment(int rank) {
@@ -120,6 +109,42 @@ struct ipc_metadata_ {
 using ipc_metadata_ptr_ = std::unique_ptr<ipc_metadata_>;
 CsvStaticDeclare(ipc_metadata_ptr_, metadata_);
 
+// TODO ( fold this into the extant pop block mechanism )
+CmiIpcBlock* popTranslateBlock_(std::atomic<CmiIpcBlock*>& free, char* base) {
+  auto* head = free.exchange(nullptr, std::memory_order_acquire);
+  if (head == nullptr) {
+    return nullptr;
+  } else if (head == (CmiIpcBlock*)kTail) {
+    auto* check = free.exchange(head, std::memory_order_release);
+    CmiAssert(check == nullptr);
+    return nullptr;
+  } else {
+    // translate the "home" PE's address into a local one
+    auto* xlatd = (CmiIpcBlock*)(base + (std::uintptr_t)head);
+    auto* check = free.exchange(xlatd->next, std::memory_order_release);
+    CmiAssert(check == nullptr);
+    return xlatd;
+  }
+}
+
+static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
+  constexpr auto nil = 0x0;
+  auto res = meta->heap.exchange(nil, std::memory_order_acquire);
+  if (res == nil) {
+    return nil;
+  } else {
+    auto next = res + size + sizeof(CmiIpcBlock);
+    auto offset = size % alignof(CmiIpcBlock);
+    auto status = meta->heap.exchange(next + offset, std::memory_order_release);
+    CmiAssert(status == nil);
+    if (next < meta->max) {
+      return res;
+    } else {
+      return nil;
+    }
+  }
+}
+
 void* translateAddr_(ipc_metadata_* meta, int rank, void* remote_ptr,
                      const std::size_t& size) {
   // TODO ( add support for SMP mode )
@@ -145,35 +170,6 @@ void* translateAddr_(ipc_metadata_* meta, int rank, void* remote_ptr,
   }
 }
 
-inline static bool acquireBlock_(ipc_metadata_* meta, CmiIpcBlock* block) {
-  block->dst = meta->mine;
-  return block->free.exchange(false, std::memory_order_relaxed);
-}
-
-// TODO ( fold this into the extant pop block mechanism )
-CmiIpcBlock* allocTranslateBlock_(ipc_metadata_* meta, int rank,
-                                  std::size_t size) {
-  auto bin = whichBin_(size);
-  CmiAssert(bin < kNumCutOffPoints);
-  auto& free = meta->shared[rank]->free[bin];
-  auto* head = free.exchange(nullptr, std::memory_order_acquire);
-  if (head == nullptr) {
-    return nullptr;
-  } else if (head == (CmiIpcBlock*)kTail) {
-    auto* check = free.exchange(head, std::memory_order_release);
-    CmiAssert(check == nullptr);
-    return nullptr;
-  } else {
-    // translate the "home" PE's address into a local one
-    auto* xlatd = (CmiIpcBlock*)translateAddr_(meta, rank, head,
-                                               size + sizeof(CmiIpcBlock));
-    auto* next = xlatd->next;
-    auto* check = free.exchange(next, std::memory_order_release);
-    CmiAssert(check == nullptr);
-    return xlatd;
-  }
-}
-
 CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
   auto myPe = CmiMyPe();
   auto myRank = CmiPhysicalRank(myPe);
@@ -181,23 +177,29 @@ CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
   auto theirRank = CmiPhysicalRank(pe);
   auto theirNode = CmiPhysicalNodeID(pe);
   CmiAssert((myRank != theirRank) && (myNode == theirNode));
-  auto* meta = CsvAccess(metadata_).get();
-  auto* block = meta->seek_cached(theirRank, size);
+  auto& meta = CsvAccess(metadata_);
+  auto& shared = meta->shared[theirRank];
+  auto bin = whichBin_(size);
+  
+  CmiAssert(bin < kNumCutOffPoints);
+  CmiAssert(((std::uintptr_t)shared % ALIGN_BYTES) == 0);
+
+  auto* block = popTranslateBlock_(shared->free[bin], (char*)shared);
   if (block == nullptr) {
-    // allocate a block from the rank
-    block = allocTranslateBlock_(meta, theirRank, size);
-    // then acquire it if we succeed
-    if (block != nullptr) {
-      auto acq = acquireBlock_(meta, block);
-      CmiAssert(acq);
+    auto totalSize = kCutOffPoints[bin];
+    auto offset = allocBlock_(shared, totalSize);
+    if (offset == 0x0) {
+      return nullptr;
     }
-  } else {
-    // sanity check (we should get our own block)
-    CmiAssert(block->dst == meta->mine);
-    // set the block as in-use again
-    auto free = block->free.exchange(false, std::memory_order_relaxed);
-    CmiAssert(free);
+    // the block's address is relative to the share
+    block = (CmiIpcBlock*)((char*)shared + offset);
+    CmiAssert(((std::uintptr_t)block % alignof(CmiIpcBlock)) == 0);
+    // construct the block
+    new (block) CmiIpcBlock(totalSize, offset);
+    block->src = theirRank;
+    block->dst = myRank;
   }
+
   return block;
 }
 
@@ -208,29 +210,16 @@ CmiIpcBlock* CmiIsBlock(void* addr) {
 }
 
 void CmiCacheBlock(CmiIpcBlock* block) {
-  auto* meta = CsvAccess(metadata_).get();
-  CmiAssert(meta->mine == block->dst);
-  // if the block hasn't been cached already:
-  if (block->cached == nullptr) {
-    // add it to the cache linked list:
-    block->cached = meta->get_cache(block->src);
-    meta->cache[block->src] = block;
-    DEBUGP(("%d> cached block (%p) from %d.\n", meta->mine, block->orig,
-            block->src));
-  }
+  return;
 }
 
 void CmiFreeBlock(CmiIpcBlock* block) {
-  auto* meta = CsvAccess(metadata_).get();
+  auto& meta = CsvAccess(metadata_);
   auto ours = block->src == meta->mine;
   if (ours) {
-    auto used = block->free.exchange(true, std::memory_order_relaxed);
-    CmiAssertMsg(!used, "double free?");
-    if (block->cached == nullptr) {
-      auto bin = whichBin_(block->size);
-      auto& free = meta->shared[meta->mine]->free[bin];
-      pushBlock_(free, block);
-    }
+    auto bin = whichBin_(block->size);
+    auto& free = meta->shared[meta->mine]->free[bin];
+    pushBlock_(free, block, (CmiIpcBlock*)block->orig);
   } else {
     // TODO ( implement this codepath! )
     CmiAbort("allocator-side free'ing unsupported\n");
@@ -238,9 +227,9 @@ void CmiFreeBlock(CmiIpcBlock* block) {
 }
 
 CmiIpcBlock* CmiPopBlock(void) {
-  auto* meta = CsvAccess(metadata_).get();
-  auto& queue = meta->shared[meta->mine]->queue;
-  return popBlock_(queue);
+  auto& meta = CsvAccess(metadata_);
+  auto* shared = meta->shared[meta->mine];
+  return popTranslateBlock_(shared->queue, (char*)shared);
 }
 
 bool CmiPushBlock(CmiIpcBlock* block) {
@@ -249,18 +238,7 @@ bool CmiPushBlock(CmiIpcBlock* block) {
   auto& queue = meta->shared[block->src]->queue;
   // the value we want to save in the "home"
   // queue is the block's original address
-  return pushBlock_(queue, block, block->orig);
-}
-
-CmiIpcBlock* CmiNewBlock(std::size_t size) {
-  // TODO ( ensure this is correctly aligned! )
-  // TODO ( cmiassert(is_bin(size)) )
-  auto& meta = CsvAccess(metadata_);
-  auto* raw = ::operator new(size + sizeof(CmiIpcBlock));
-  CmiAssert((std::uintptr_t)raw % alignof(CmiIpcBlock) == 0);
-  auto* block = new (raw) CmiIpcBlock(size);
-  block->src = meta->mine;
-  return block;
+  return pushBlock_(queue, block, (CmiIpcBlock*)block->orig);
 }
 
 static void handleInitialize_(void* msg) {
@@ -277,7 +255,8 @@ static void handleInitialize_(void* msg) {
   if ((meta->nPeers == meta->shared.size()) && meta->init) {
     // resume the sleeping thread
     if (CmiMyPe() == 0) {
-      CmiPrintf("CMI> xpmem ipc pool ready.\n");
+      CmiPrintf("CMI> xpmem pool init'd with %luB segment.\n",
+                CpvAccess(kSegmentSize));
     }
     CthAwaken(meta->init);
   }
@@ -286,23 +265,13 @@ static void handleInitialize_(void* msg) {
 void CmiInitIpcMetadata(char** argv, CthThread th) {
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
+  initSegmentSize_(argv);
   CmiNodeAllBarrier();
 
   CsvInitialize(ipc_metadata_ptr_, metadata_);
   auto& meta = CsvAccess(metadata_);
   meta.reset(new ipc_metadata_());
   meta->init = th;
-
-  // TODO ( determine how to seed pool! )
-  // NOTE ( if the demo hangs -- init size may be wrong )
-  auto nInitial = 16;
-  auto initialSize = 128;
-  auto bin = whichBin_(initialSize);
-  auto* shared = meta->shared[meta->mine];
-  for (auto i = 0; i < nInitial; i++) {
-    auto* block = CmiNewBlock(initialSize);
-    pushBlock_(shared->free[bin], block);
-  }
 
   int* pes;
   int nPes;
@@ -317,7 +286,7 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
     CmiSetHandler(imsg, initHdl);
     imsg->from = meta->mine;
     imsg->segid = meta->get_segment(meta->mine);
-    imsg->shared = shared;
+    imsg->shared = meta->shared[meta->mine];
     // send messages to all the pes on this node
     for (auto i = 0; i < nPes; i++) {
       auto& pe = pes[i];

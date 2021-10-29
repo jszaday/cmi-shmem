@@ -12,9 +12,7 @@
 
 #if CMI_HAS_XPMEM
 #define CMI_IPC_BLOCK_FT_FIELDS \
-  CmiIpcBlock* orig;            \
-  std::atomic<bool> free;       \
-  CmiIpcBlock* cached;
+  std::uintptr_t orig;
 #else
 #define CMI_IPC_BLOCK_FT_FIELDS
 #endif
@@ -35,8 +33,8 @@ struct CmiIpcBlock {
   char align[(sizeof(blockSizeHelper_) % ALIGN_BYTES)];
 
 #if CMI_HAS_XPMEM
-  CmiIpcBlock(std::size_t size_)
-      : next(nullptr), size(size_), orig(this), free(true), cached(nullptr) {}
+  CmiIpcBlock(std::size_t size_, std::uintptr_t orig_)
+      : next(nullptr), size(size_), orig(orig_) {}
 #else
   CmiIpcBlock(std::size_t size_) : next(nullptr), size(size_) {}
 #endif
