@@ -4,6 +4,8 @@
 #include "cmi-shm.cc"
 #endif
 
+CpvDeclare(std::size_t, kSegmentSize);
+
 void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
   auto* msg = CmiBlockToMsg(block);
   if (init) {

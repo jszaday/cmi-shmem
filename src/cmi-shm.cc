@@ -13,7 +13,6 @@
 #include <memory>
 
 const char* kName = "cmi_shmem_meta_";
-const std::size_t kDefaultSize = 16384;
 
 using ipc_queue_ = std::atomic<CmiIpcBlock*>;
 
@@ -32,7 +31,7 @@ struct ipc_metadata_deleter_ {
   inline void operator()(ipc_metadata_* meta) {
     if (meta->node == CmiPhysicalRank(CmiMyPe())) {
       auto fd = meta->fd;
-      auto status = munmap((void*)meta->queues, kDefaultSize);
+      auto status = munmap((void*)meta->queues, CpvAccess(kSegmentSize));
       status = status && close(fd);
       shm_unlink(kName);
     }
@@ -99,6 +98,7 @@ static ipc_metadata_* openMetadata_(const char* name, void* addr,
 }
 
 void CmiInitIpcMetadata(char** argv, CthThread th) {
+  initSegmentSize_(argv);
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
   CmiNodeAllBarrier();
@@ -106,7 +106,7 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   CsvInitialize(ipc_metadata_ptr_, metadata_);
   // TODO ( figure out a better way to pick size/magic number )
   CsvAccess(metadata_).reset(
-      openMetadata_(kName, (void*)0x42424000, kDefaultSize));
+      openMetadata_(kName, (void*)0x42424000, CpvAccess(kSegmentSize)));
   CmiAssert((bool)CsvAccess(metadata_));
   // TODO ( identify which fn should be used here )
   CmiBarrier();
@@ -114,7 +114,8 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   DEBUGP(
       ("%d> meta is at address %p\n", CmiMyPe(), CsvAccess(metadata_).get()));
   if (CmiMyPe() == 0) {
-    CmiPrintf("CMI> posix shm pool ready.\n");
+    CmiPrintf("CMI> posix shm pool init'd with %luB segment.\n",
+              CpvAccess(kSegmentSize));
   }
   // resume the callback
   if (th) CthAwaken(th);

@@ -18,6 +18,18 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     1048576,   2097152,   4194304,   8388608,   16777216, 33554432, 67108864,
     134217728, 268435456, 536870912, 1073741824};
 
+const std::size_t kDefaultSegmentSize = 16384;
+
+CpvExtern(std::size_t, kSegmentSize);
+
+inline void initSegmentSize_(char** argv) {
+  CpvInitialize(std::size_t, kSegmentSize);
+  CmiInt8 value;
+  auto flag =
+      CmiGetArgLongDesc(argv, "+segmentsize", &value, "bytes per ipc segment");
+  CpvAccess(kSegmentSize) = flag ? (std::size_t)value : kDefaultSegmentSize;
+}
+
 // TODO ( find a better way to do this )
 inline std::size_t whichBin_(std::size_t size) {
   std::size_t bin;
