@@ -23,6 +23,8 @@ struct init_msg_ {
   ipc_shared_* shared;
 };
 
+// TODO ( detach xpmem segments at close )
+// ( not urgently needed since xpmem does it for us )
 struct ipc_xpmem_metadata_ : public ipc_metadata_ {
   // maps ranks to segments
   std::map<int, xpmem_segid_t> segments;
