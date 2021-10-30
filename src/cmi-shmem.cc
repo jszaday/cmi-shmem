@@ -6,6 +6,13 @@
 
 CpvDeclare(std::size_t, kSegmentSize);
 
+inline std::size_t whichBin_(std::size_t size);
+inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
+                                     void* base);
+inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
+                              std::uintptr_t value, void* base);
+static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size);
+
 void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
   auto* msg = CmiBlockToMsg(block);
   if (init) {
@@ -42,8 +49,6 @@ bool CmiPushBlock(CmiIpcBlock* block) {
   CmiAssert(block->dst == meta->mine);
   return pushBlock_(queue, block->orig, shared);
 }
-
-static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size);
 
 CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
   auto myPe = CmiMyPe();
@@ -114,4 +119,48 @@ static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
       return kNilOffset;
     }
   }
+}
+
+// TODO ( find a better way to do this )
+inline std::size_t whichBin_(std::size_t size) {
+  std::size_t bin;
+  for (bin = 0; bin < kNumCutOffPoints; bin++) {
+    if (size <= kCutOffPoints[bin]) {
+      break;
+    }
+  }
+  return bin;
+}
+
+inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
+                                     void* base) {
+  auto prev = head.exchange(kNilOffset, std::memory_order_acquire);
+  if (prev == kNilOffset) {
+    return nullptr;
+  } else if (prev == kTail) {
+    auto check = head.exchange(prev, std::memory_order_release);
+    CmiAssert(check == kNilOffset);
+    return nullptr;
+  } else {
+    // translate the "home" PE's address into a local one
+    CmiAssert(((std::uintptr_t)base % ALIGN_BYTES) == 0);
+    auto* xlatd = (CmiIpcBlock*)((char*)base + prev);
+    auto check = head.exchange(xlatd->next, std::memory_order_release);
+    CmiAssert(check == kNilOffset);
+    return xlatd;
+  }
+}
+
+inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
+                              std::uintptr_t value, void* base) {
+  CmiAssert(value != kNilOffset);
+  auto prev = head.exchange(kNilOffset, std::memory_order_acquire);
+  if (prev == kNilOffset) {
+    return false;
+  }
+  auto* block = (CmiIpcBlock*)((char*)base + value);
+  block->next = prev;
+  auto check = head.exchange(value, std::memory_order_release);
+  CmiAssert(check == kNilOffset);
+  return true;
 }

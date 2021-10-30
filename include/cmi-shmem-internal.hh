@@ -44,6 +44,18 @@ struct ipc_shared_ {
   }
 };
 
+// shared data for each pe
+struct ipc_metadata_ {
+  // maps ranks to shared segments
+  std::map<int, ipc_shared_*> shared;
+  // physical node rank
+  int mine;
+  // base constructor
+  ipc_metadata_(void) : mine(CmiPhysicalRank(CmiMyPe())) {}
+  // virtual destructor may be needed
+  virtual ~ipc_metadata_() {}
+};
+
 inline static void initIpcShared_(ipc_shared_* shared) {
   auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
                                 (sizeof(ipc_shared_) % ALIGN_BYTES));
@@ -59,68 +71,12 @@ inline static ipc_shared_* makeIpcShared_(void) {
   return shared;
 }
 
-// shared data for each pe
-struct ipc_metadata_ {
-  // maps ranks to shared segments
-  std::map<int, ipc_shared_*> shared;
-  // physical node rank
-  int mine;
-  // base constructor
-  ipc_metadata_(void) : mine(CmiPhysicalRank(CmiMyPe())) {}
-  // virtual destructor may be needed
-  virtual ~ipc_metadata_() {}
-};
-
 inline void initSegmentSize_(char** argv) {
   CpvInitialize(std::size_t, kSegmentSize);
   CmiInt8 value;
   auto flag =
       CmiGetArgLongDesc(argv, "+segmentsize", &value, "bytes per ipc segment");
   CpvAccess(kSegmentSize) = flag ? (std::size_t)value : kDefaultSegmentSize;
-}
-
-// TODO ( find a better way to do this )
-inline std::size_t whichBin_(std::size_t size) {
-  std::size_t bin;
-  for (bin = 0; bin < kNumCutOffPoints; bin++) {
-    if (size <= kCutOffPoints[bin]) {
-      break;
-    }
-  }
-  return bin;
-}
-
-inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
-                                     void* base) {
-  auto prev = head.exchange(kNilOffset, std::memory_order_acquire);
-  if (prev == kNilOffset) {
-    return nullptr;
-  } else if (prev == kTail) {
-    auto check = head.exchange(prev, std::memory_order_release);
-    CmiAssert(check == kNilOffset);
-    return nullptr;
-  } else {
-    // translate the "home" PE's address into a local one
-    CmiAssert(((std::uintptr_t)base % ALIGN_BYTES) == 0);
-    auto* xlatd = (CmiIpcBlock*)((char*)base + prev);
-    auto check = head.exchange(xlatd->next, std::memory_order_release);
-    CmiAssert(check == kNilOffset);
-    return xlatd;
-  }
-}
-
-inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
-                              std::uintptr_t value, void* base) {
-  CmiAssert(value != kNilOffset);
-  auto prev = head.exchange(kNilOffset, std::memory_order_acquire);
-  if (prev == kNilOffset) {
-    return false;
-  }
-  auto* block = (CmiIpcBlock*)((char*)base + value);
-  block->next = prev;
-  auto check = head.exchange(value, std::memory_order_release);
-  CmiAssert(check == kNilOffset);
-  return true;
 }
 
 #endif
