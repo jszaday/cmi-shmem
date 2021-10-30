@@ -4,8 +4,6 @@
 #include "cmi-shm.cc"
 #endif
 
-CpvDeclare(std::size_t, kSegmentSize);
-
 inline std::size_t whichBin_(std::size_t size);
 inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base);
@@ -66,7 +64,7 @@ CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
   if (block == nullptr) {
     auto totalSize = kCutOffPoints[bin];
     auto offset = allocBlock_(shared, totalSize);
-    if (offset == kNilOffset) {
+    if (offset == cmi::ipc::nil) {
       return nullptr;
     }
     // the block's address is relative to the share
@@ -105,18 +103,18 @@ CmiIpcBlock* CmiIsBlock(void* addr) {
 }
 
 static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
-  auto res = meta->heap.exchange(kNilOffset, std::memory_order_acquire);
-  if (res == kNilOffset) {
-    return kNilOffset;
+  auto res = meta->heap.exchange(cmi::ipc::nil, std::memory_order_acquire);
+  if (res == cmi::ipc::nil) {
+    return cmi::ipc::nil;
   } else {
     auto next = res + size + sizeof(CmiIpcBlock);
     auto offset = size % alignof(CmiIpcBlock);
     auto status = meta->heap.exchange(next + offset, std::memory_order_release);
-    CmiAssert(status == kNilOffset);
+    CmiAssert(status == cmi::ipc::nil);
     if (next < meta->max) {
       return res;
     } else {
-      return kNilOffset;
+      return cmi::ipc::nil;
     }
   }
 }
@@ -134,33 +132,33 @@ inline std::size_t whichBin_(std::size_t size) {
 
 inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base) {
-  auto prev = head.exchange(kNilOffset, std::memory_order_acquire);
-  if (prev == kNilOffset) {
+  auto prev = head.exchange(cmi::ipc::nil, std::memory_order_acquire);
+  if (prev == cmi::ipc::nil) {
     return nullptr;
-  } else if (prev == kTail) {
+  } else if (prev == cmi::ipc::max) {
     auto check = head.exchange(prev, std::memory_order_release);
-    CmiAssert(check == kNilOffset);
+    CmiAssert(check == cmi::ipc::nil);
     return nullptr;
   } else {
     // translate the "home" PE's address into a local one
     CmiAssert(((std::uintptr_t)base % ALIGN_BYTES) == 0);
     auto* xlatd = (CmiIpcBlock*)((char*)base + prev);
     auto check = head.exchange(xlatd->next, std::memory_order_release);
-    CmiAssert(check == kNilOffset);
+    CmiAssert(check == cmi::ipc::nil);
     return xlatd;
   }
 }
 
 inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
                               std::uintptr_t value, void* base) {
-  CmiAssert(value != kNilOffset);
-  auto prev = head.exchange(kNilOffset, std::memory_order_acquire);
-  if (prev == kNilOffset) {
+  CmiAssert(value != cmi::ipc::nil);
+  auto prev = head.exchange(cmi::ipc::nil, std::memory_order_acquire);
+  if (prev == cmi::ipc::nil) {
     return false;
   }
   auto* block = (CmiIpcBlock*)((char*)base + value);
   block->next = prev;
   auto check = head.exchange(value, std::memory_order_release);
-  CmiAssert(check == kNilOffset);
+  CmiAssert(check == cmi::ipc::nil);
   return true;
 }

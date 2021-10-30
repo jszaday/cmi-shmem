@@ -11,11 +11,8 @@
 
 #define DEBUGP(x) /* CmiPrintf x; */
 
-constexpr std::uintptr_t kNilOffset = 0x0;
-static constexpr auto kTail = std::numeric_limits<std::uintptr_t>::max();
-
 constexpr std::size_t kDefaultSegmentSize = 16384;
-CpvExtern(std::size_t, kSegmentSize);
+CpvStaticDeclare(std::size_t, kSegmentSize);
 
 constexpr std::size_t kNumCutOffPoints = 25;
 const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
@@ -37,9 +34,9 @@ struct ipc_shared_ {
   std::uintptr_t max;
 
   ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
-      : queue(kTail), heap(begin), max(end) {
+      : queue(cmi::ipc::max), heap(begin), max(end) {
     for (auto& f : this->free) {
-      f.store(kTail);
+      f.store(cmi::ipc::max);
     }
   }
 };
@@ -59,7 +56,7 @@ struct ipc_metadata_ {
 inline static void initIpcShared_(ipc_shared_* shared) {
   auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
                                 (sizeof(ipc_shared_) % ALIGN_BYTES));
-  CmiAssert(begin != kNilOffset);
+  CmiAssert(begin != cmi::ipc::nil);
   auto end = begin + CpvAccess(kSegmentSize);
   new (shared) ipc_shared_(begin, end);
 }

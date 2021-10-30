@@ -3,11 +3,15 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 
 namespace cmi {
 namespace ipc {
+// used to represent an empty linked list
 constexpr auto nil = std::uintptr_t(0);
-}
+// used to represent the tail of a linked list
+constexpr auto max = std::numeric_limits<std::uintptr_t>::max();
+}  // namespace ipc
 }  // namespace cmi
 
 #define CMK_IPC_BLOCK_FIELDS \
