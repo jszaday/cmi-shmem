@@ -4,18 +4,18 @@
 #include <atomic>
 #include <cstdint>
 
+namespace cmi {
+namespace ipc {
+constexpr auto nil = std::uintptr_t(0);
+}
+}  // namespace cmi
+
 #define CMK_IPC_BLOCK_FIELDS \
   int src;                   \
+  std::uintptr_t orig;       \
   int dst;                   \
-  CmiIpcBlock* next;         \
+  std::uintptr_t next;       \
   std::size_t size;
-
-#if CMI_HAS_XPMEM
-#define CMI_IPC_BLOCK_FT_FIELDS \
-  std::uintptr_t orig;
-#else
-#define CMI_IPC_BLOCK_FT_FIELDS
-#endif
 
 // TODO ( generate better names than src/dst )
 struct CmiIpcBlock {
@@ -23,22 +23,15 @@ struct CmiIpcBlock {
  private:
   class blockSizeHelper_ {
     CMK_IPC_BLOCK_FIELDS;
-    CMI_IPC_BLOCK_FT_FIELDS;
   };
 
  public:
   CMK_IPC_BLOCK_FIELDS;
-  CMI_IPC_BLOCK_FT_FIELDS;
 
-  char align[(sizeof(blockSizeHelper_) % ALIGN_BYTES)];
-
-#if CMI_HAS_XPMEM
   CmiIpcBlock(std::size_t size_, std::uintptr_t orig_)
-      : next(nullptr), size(size_), orig(orig_) {}
-#else
-  CmiIpcBlock(std::size_t size_) : next(nullptr), size(size_) {}
-#endif
-  // TODO ( add padding to ensure alignment! )
+      : orig(orig_), next(cmi::ipc::nil), size(size_) {}
+
+  char padding[(sizeof(blockSizeHelper_) % ALIGN_BYTES)];
 };
 
 void CmiInitIpcMetadata(char** argv, CthThread th);
@@ -50,7 +43,9 @@ CmiIpcBlock* CmiPopBlock(void);
 CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size);
 void CmiFreeBlock(CmiIpcBlock*);
 
-void CmiCacheBlock(CmiIpcBlock*);
+// currently a no-op but may be eventually usable
+// intended to "capture" blocks from remote pes
+inline void CmiCacheBlock(CmiIpcBlock*) { return; }
 
 // identifies whether a void* is the payload of a block
 CmiIpcBlock* CmiIsBlock(void*);
