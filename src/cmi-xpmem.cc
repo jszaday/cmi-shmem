@@ -1,6 +1,7 @@
 #include <cmi-shmem-internal.hh>
 #include <map>
 #include <memory>
+#include <vector>
 
 extern "C" {
 #include <xpmem.h>
@@ -16,12 +17,34 @@ extern "C" {
 #define OPAL_ALIGN_PAD_AMOUNT(x, s) \
   ((~((uintptr_t)(x)) + 1) & ((uintptr_t)(s)-1))
 
+#if CMK_SMP
+CsvStaticDeclare(CmiNodeLock, sleeper_lock);
+#endif
+
+CpvExtern(int, CthResumeNormalThreadIdx);
+using sleeper_map_t = std::vector<CthThread>;
+CsvStaticDeclare(sleeper_map_t, sleepers);
+
 struct init_msg_ {
   char core[CmiMsgHeaderSizeBytes];
   int from;
   xpmem_segid_t segid;
   ipc_shared_* shared;
 };
+
+static void awakenSleepers_(void) {
+  auto& sleepers = CsvAccess(sleepers);
+  for (auto i = 0; i < sleepers.size(); i++) {
+    auto& th = sleepers[i];
+    if (i == CmiMyRank()) {
+      CthAwaken(th);
+    } else {
+      auto* token = CthGetToken(th);
+      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
+      CmiPushPE(i, token);
+    }
+  }
+}
 
 // TODO ( detach xpmem segments at close )
 // ( not urgently needed since xpmem does it for us )
@@ -30,8 +53,6 @@ struct ipc_xpmem_metadata_ : public ipc_metadata_ {
   std::map<int, xpmem_segid_t> segments;
   // maps segments to xpmem apids
   std::map<xpmem_segid_t, xpmem_apid_t> instances;
-  // initialization lock
-  CthThread init;
   // number of physical peers
   int nPeers;
   // create our local shared data
@@ -112,13 +133,14 @@ static void handleInitialize_(void* msg) {
   // then free the message
   CmiFree(imsg);
   // if we received messages from all our peers:
-  if ((meta->nPeers == meta->shared.size()) && meta->init) {
+  if (meta->nPeers == meta->shared.size()) {
     // resume the sleeping thread
     if (CmiMyPe() == 0) {
       CmiPrintf("CMI> xpmem pool init'd with %luB segment.\n",
                 CpvAccess(kSegmentSize));
     }
-    CthAwaken(meta->init);
+
+    awakenSleepers_();
   }
 }
 
@@ -126,21 +148,49 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   initSegmentSize_(argv);
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
+  if (CmiMyRank() == 0) {
+    CsvInitialize(sleeper_map_t, sleepers);
+    CsvAccess(sleepers).resize(CmiMyNodeSize());
+#if CMK_SMP
+    CsvInitialize(CmiNodeLock, sleeper_lock);
+    CsvAccess(sleeper_lock) = CmiCreateLock();
+#endif
+  }
+  // ensure topo is done (and sleeper map ready)
   CmiNodeAllBarrier();
 
-  auto* meta = new ipc_xpmem_metadata_();
-  CsvInitialize(ipc_metadata_ptr_, metadata_);
-  CsvAccess(metadata_).reset(meta);
-  meta->init = th;
+#if CMK_SMP
+  if (!CmiInCommThread()) {
+    CmiLock(CsvAccess(sleeper_lock));
+#endif
+    (CsvAccess(sleepers))[CmiMyRank()] = th;
+#if CMK_SMP
+    CmiUnlock(CsvAccess(sleeper_lock));
+  }
+
+  // ensure all threads have set their sleeper
+  CmiNodeAllBarrier();
+#endif
+
+  ipc_xpmem_metadata_* meta;
+  if (CmiMyRank() == 0) {
+    meta = new ipc_xpmem_metadata_();
+    CsvInitialize(ipc_metadata_ptr_, metadata_);
+    CsvAccess(metadata_).reset(meta);
+  } else {
+    return;
+  }
 
   int* pes;
   int nPes;
   auto thisPe = CmiMyPe();
   auto thisNode = CmiPhysicalNodeID(CmiMyPe());
   CmiGetPesOnPhysicalNode(thisNode, &pes, &nPes);
-  meta->nPeers = nPes;
+  auto nSize = CmiMyNodeSize();
+  auto nProcs = nPes / nSize;
+  meta->nPeers = nProcs;
 
-  if (nPes > 1) {
+  if (nProcs > 1) {
     auto initHdl = CmiRegisterHandler(handleInitialize_);
     auto* imsg = (init_msg_*)CmiAlloc(sizeof(init_msg_));
     CmiSetHandler(imsg, initHdl);
@@ -148,9 +198,9 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
     imsg->segid = meta->get_segment(meta->mine);
     imsg->shared = meta->shared[meta->mine];
     // send messages to all the pes on this node
-    for (auto i = 0; i < nPes; i++) {
-      auto& pe = pes[i];
-      auto last = i == (nPes - 1);
+    for (auto i = 0; i < nProcs; i++) {
+      auto& pe = pes[i * nSize];
+      auto last = i == (nProcs - 1);
       if (pe == thisPe) {
         if (last) {
           CmiFree(imsg);
@@ -165,7 +215,7 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
       }
     }
   } else {
-    // single pe -- wake up the sleeping thread
-    CthAwaken(th);
+    // single process -- wake up sleeping thread(s)
+    awakenSleepers_();
   }
 }
