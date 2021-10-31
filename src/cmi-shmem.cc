@@ -4,6 +4,8 @@
 #include "cmi-shm.cc"
 #endif
 
+CpvExtern(int, CthResumeNormalThreadIdx);
+
 inline std::size_t whichBin_(std::size_t size);
 inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base);
@@ -174,4 +176,18 @@ inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
   auto check = head.exchange(value, std::memory_order_release);
   CmiAssert(check == cmi::ipc::nil);
   return true;
+}
+
+static void awakenSleepers_(void) {
+  auto& sleepers = CsvAccess(sleepers);
+  for (auto i = 0; i < sleepers.size(); i++) {
+    auto& th = sleepers[i];
+    if (i == CmiMyRank()) {
+      CthAwaken(th);
+    } else {
+      auto* token = CthGetToken(th);
+      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
+      CmiPushPE(i, token);
+    }
+  }
 }

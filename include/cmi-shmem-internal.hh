@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <vector>
 
 #define DEBUGP(x) /* CmiPrintf x; */
 
@@ -24,6 +25,13 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
 struct ipc_metadata_;
 using ipc_metadata_ptr_ = std::unique_ptr<ipc_metadata_>;
 CsvStaticDeclare(ipc_metadata_ptr_, metadata_);
+
+#if CMK_SMP
+CsvStaticDeclare(CmiNodeLock, sleeper_lock);
+#endif
+
+using sleeper_map_t = std::vector<CthThread>;
+CsvStaticDeclare(sleeper_map_t, sleepers);
 
 // the data each pe shares with its peers
 // contains pool of free blocks, heap, and receive queue
@@ -75,5 +83,32 @@ inline void initSegmentSize_(char** argv) {
       CmiGetArgLongDesc(argv, "+segmentsize", &value, "bytes per ipc segment");
   CpvAccess(kSegmentSize) = flag ? (std::size_t)value : kDefaultSegmentSize;
 }
+
+inline static void initSleepers_(void) {
+  if (CmiMyRank() == 0) {
+    CsvInitialize(sleeper_map_t, sleepers);
+    CsvAccess(sleepers).resize(CmiMyNodeSize());
+#if CMK_SMP
+    CsvInitialize(CmiNodeLock, sleeper_lock);
+    CsvAccess(sleeper_lock) = CmiCreateLock();
+#endif
+  }
+}
+
+inline static void putSleeper_(CthThread th) {
+#if CMK_SMP
+  if (CmiInCommThread()) {
+    return;
+  }
+  CmiLock(CsvAccess(sleeper_lock));
+#endif
+  (CsvAccess(sleepers))[CmiMyRank()] = th;
+#if CMK_SMP
+  CmiAssert(!th || !CthIsMainThread(th));
+  CmiUnlock(CsvAccess(sleeper_lock));
+#endif
+}
+
+static void awakenSleepers_(void);
 
 #endif

@@ -17,34 +17,12 @@ extern "C" {
 #define OPAL_ALIGN_PAD_AMOUNT(x, s) \
   ((~((uintptr_t)(x)) + 1) & ((uintptr_t)(s)-1))
 
-#if CMK_SMP
-CsvStaticDeclare(CmiNodeLock, sleeper_lock);
-#endif
-
-CpvExtern(int, CthResumeNormalThreadIdx);
-using sleeper_map_t = std::vector<CthThread>;
-CsvStaticDeclare(sleeper_map_t, sleepers);
-
 struct init_msg_ {
   char core[CmiMsgHeaderSizeBytes];
   int from;
   xpmem_segid_t segid;
   ipc_shared_* shared;
 };
-
-static void awakenSleepers_(void) {
-  auto& sleepers = CsvAccess(sleepers);
-  for (auto i = 0; i < sleepers.size(); i++) {
-    auto& th = sleepers[i];
-    if (i == CmiMyRank()) {
-      CthAwaken(th);
-    } else {
-      auto* token = CthGetToken(th);
-      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-      CmiPushPE(i, token);
-    }
-  }
-}
 
 // TODO ( detach xpmem segments at close )
 // ( not urgently needed since xpmem does it for us )
@@ -145,32 +123,16 @@ static void handleInitialize_(void* msg) {
 }
 
 void CmiInitIpcMetadata(char** argv, CthThread th) {
+  initSleepers_();
   initSegmentSize_(argv);
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
-  if (CmiMyRank() == 0) {
-    CsvInitialize(sleeper_map_t, sleepers);
-    CsvAccess(sleepers).resize(CmiMyNodeSize());
-#if CMK_SMP
-    CsvInitialize(CmiNodeLock, sleeper_lock);
-    CsvAccess(sleeper_lock) = CmiCreateLock();
-#endif
-  }
-  // ensure topo is done (and sleeper map ready)
   CmiNodeAllBarrier();
 
-#if CMK_SMP
-  if (!CmiInCommThread()) {
-    CmiLock(CsvAccess(sleeper_lock));
-#endif
-    (CsvAccess(sleepers))[CmiMyRank()] = th;
-#if CMK_SMP
-    // cannot awake main threads :(
-    CmiAssert(!th || !CthIsMainThread(th));
-    CmiUnlock(CsvAccess(sleeper_lock));
-  }
+  putSleeper_(th);
 
-  // ensure all threads have set their sleeper
+#if CMK_SMP
+  // ensure all sleepers are reg'd
   CmiNodeAllBarrier();
 #endif
 
