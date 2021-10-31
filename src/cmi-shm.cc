@@ -52,8 +52,9 @@ struct ipc_shm_metadata_ : public ipc_metadata_ {
   ipc_shm_metadata_(void) {
     int node = CmiPhysicalNodeID(CmiMyPe());
     int nPes = CmiNumPesOnPhysicalNode(node);
+    int nProcs = nPes / CmiMyNodeSize();
     // for each rank in this physical node:
-    for (auto rank = 0; rank < nPes; rank++) {
+    for (auto rank = 0; rank < nProcs; rank++) {
       // open its shared segment
       auto res = openShared_(rank);
       // initializing it if it's ours
@@ -92,18 +93,20 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   CmiInitCPUTopology(argv);
   CmiNodeAllBarrier();
 
-  CsvInitialize(ipc_metadata_ptr_, metadata_);
-  CsvAccess(metadata_).reset(new ipc_shm_metadata_);
-  // TODO ( identify which fn should be used here )
-  // ( basically phyical node barrier vs. node barrier )
-  CmiBarrier();
-  // NOTE ( this has to match across all PEs on a node )
-  DEBUGP(
-      ("%d> meta is at address %p\n", CmiMyPe(), CsvAccess(metadata_).get()));
+  if (CmiMyRank() == 0) {
+    CsvInitialize(ipc_metadata_ptr_, metadata_);
+    CsvAccess(metadata_).reset(new ipc_shm_metadata_);
+  }
+
   if (CmiMyPe() == 0) {
     CmiPrintf("CMI> posix shm pool init'd with %luB segment.\n",
               CpvAccess(kSegmentSize));
   }
+
+  // TODO ( identify which fn should be used here )
+  // ( basically phyical node barrier vs. node barrier )
+  CmiBarrier();
+
   // resume the callback
   if (th) CthAwaken(th);
 }
