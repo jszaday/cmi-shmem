@@ -32,8 +32,9 @@ struct pid_message_ {
 
 // opens a shared memory segment for a given physical rank
 static std::pair<int, ipc_shared_*> openShared_(int rank) {
-  // get the size from the cpv
-  auto& size = CpvAccess(kSegmentSize);
+  // determine the size of the shared segment
+  // (adding the size of the queues and what nots)
+  auto size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
   // generate a name for this pe
   auto slen = snprintf(NULL, 0, CMI_SHARED_FMT, CsvAccess(node_pid), rank);
   auto name = new char[slen];
