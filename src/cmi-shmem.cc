@@ -47,7 +47,12 @@ void CmiIpcBlockCallback(int cond) {
 CmiIpcBlock* CmiPopBlock(void) {
   auto& meta = CsvAccess(metadata_);
   auto& shared = meta->shared[meta->mine];
-  return popBlock_(shared->queue, shared);
+  if (shared) {
+    return popBlock_(shared->queue, shared);
+  } else {
+    // here before init completes
+    return nullptr;
+  }
 }
 
 bool CmiPushBlock(CmiIpcBlock* block) {
