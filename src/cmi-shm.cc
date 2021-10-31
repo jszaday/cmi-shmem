@@ -80,7 +80,8 @@ struct ipc_shm_metadata_ : public ipc_metadata_ {
       close(fd);
       // unlinking the shm segment for our pe
       if (rank == this->mine) {
-        auto slen = snprintf(NULL, 0, CMI_SHARED_FMT, CsvAccess(node_pid), rank);
+        auto slen =
+            snprintf(NULL, 0, CMI_SHARED_FMT, CsvAccess(node_pid), rank);
         auto name = new char[slen];
         sprintf(name, CMI_SHARED_FMT, CsvAccess(node_pid), rank);
         shm_unlink(name);
@@ -113,7 +114,7 @@ static void sendPid_(void) {
   auto* pmsg = (pid_message_*)CmiAlloc(sizeof(pid_message_));
   CmiSetHandler(pmsg, CpvAccess(handle_node_pid));
   pmsg->pid = CsvAccess(node_pid);
-  
+
   int nPes;
   int* pes;
   int node = CmiPhysicalNodeID(CmiMyPe());
