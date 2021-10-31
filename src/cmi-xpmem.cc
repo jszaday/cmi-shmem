@@ -165,6 +165,8 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
 #endif
     (CsvAccess(sleepers))[CmiMyRank()] = th;
 #if CMK_SMP
+    // cannot awake main threads :(
+    CmiAssert(!th || !CthIsMainThread(th));
     CmiUnlock(CsvAccess(sleeper_lock));
   }
 
