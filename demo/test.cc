@@ -64,7 +64,11 @@ void test_thread(void*) {
   // determine the number of iters to run for
   auto nIters = (nPes > 1) ? nMsgs : 0;
   if (nIters) {
-    nIters -= (nIters % (nPes - 1));
+    if (nIters < nPes) {
+      nIters = nPes - 1;
+    } else {
+      nIters -= (nIters % (nPes - 1));
+    }
   }
   CpvAccess(send_count) = nIters;
   auto nSent = 0;
