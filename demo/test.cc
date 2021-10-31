@@ -129,8 +129,7 @@ void test_init(int argc, char** argv) {
   CpvAccess(handle_exit) = CmiRegisterHandler(exit_handler);
   // create a thread to be resumed when setup completes
 #if CMK_SMP
-  auto* th = CmiInCommThread() ? nullptr
-                               : CthCreate(test_thread, nullptr, 0);
+  auto* th = CmiInCommThread() ? nullptr : CthCreate(test_thread, nullptr, 0);
 #else
   auto* th = CthCreate(test_thread, nullptr, 0);
 #endif

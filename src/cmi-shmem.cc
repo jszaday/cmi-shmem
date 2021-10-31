@@ -11,7 +11,8 @@ inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base);
 inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
                               std::uintptr_t value, void* base);
-static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size);
+static std::uintptr_t allocBlock_(ipc_shared_* meta,
+                                  std::size_t size) throw(std::bad_alloc);
 
 void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
   auto* msg = CmiBlockToMsg(block);
@@ -68,7 +69,7 @@ bool CmiPushBlock(CmiIpcBlock* block) {
   return pushBlock_(queue, block->orig, shared);
 }
 
-CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
+CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) throw(std::bad_alloc) {
   auto myPe = CmiMyPe();
   auto myRank = CmiPhysicalRank(myPe);
   auto myNode = CmiPhysicalNodeID(myPe);
@@ -122,19 +123,22 @@ CmiIpcBlock* CmiIsBlock(void* addr) {
   }
 }
 
-static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
+static std::uintptr_t allocBlock_(ipc_shared_* meta,
+                                  std::size_t size) throw(std::bad_alloc) {
   auto res = meta->heap.exchange(cmi::ipc::nil, std::memory_order_acquire);
   if (res == cmi::ipc::nil) {
     return cmi::ipc::nil;
   } else {
     auto next = res + size + sizeof(CmiIpcBlock);
     auto offset = size % alignof(CmiIpcBlock);
-    auto status = meta->heap.exchange(next + offset, std::memory_order_release);
+    auto oom = next >= meta->max;
+    auto value = oom ? res : (next + offset);
+    auto status = meta->heap.exchange(value, std::memory_order_release);
     CmiAssert(status == cmi::ipc::nil);
-    if (next < meta->max) {
-      return res;
+    if (oom) {
+      throw std::bad_alloc();
     } else {
-      return cmi::ipc::nil;
+      return res;
     }
   }
 }

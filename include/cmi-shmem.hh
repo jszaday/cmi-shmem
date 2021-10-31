@@ -44,7 +44,12 @@ void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP);
 bool CmiPushBlock(CmiIpcBlock*);
 CmiIpcBlock* CmiPopBlock(void);
 
-CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size);
+// tries to allocate a block, returning null if unsucessful
+// (fails when other PEs are contending resources)
+// note: throws bad_alloc if we ran out of memory
+CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) throw(std::bad_alloc);
+
+// frees a block -- enabling it to be used again
 void CmiFreeBlock(CmiIpcBlock*);
 
 // currently a no-op but may be eventually usable
