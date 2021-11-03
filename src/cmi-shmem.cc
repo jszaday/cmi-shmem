@@ -12,7 +12,7 @@ inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
 inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
                               std::uintptr_t value, void* base);
 static std::uintptr_t allocBlock_(ipc_shared_* meta,
-                                  std::size_t size) throw(std::bad_alloc);
+                                  std::size_t size);
 
 void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
   auto* msg = CmiBlockToMsg(block);
@@ -45,13 +45,16 @@ void CmiIpcBlockCallback(int cond) {
   }
 }
 
+inline static bool metadataReady_(ipc_metadata_ptr_& meta) {
+  return meta && meta->shared[meta->mine];
+}
+
 CmiIpcBlock* CmiPopBlock(void) {
   auto& meta = CsvAccess(metadata_);
-  auto& shared = meta->shared[meta->mine];
-  if (shared) {
+  if (metadataReady_(meta)) {
+    auto& shared = meta->shared[meta->mine];
     return popBlock_(shared->queue, shared);
   } else {
-    // here before init completes
     return nullptr;
   }
 }
@@ -69,7 +72,7 @@ bool CmiPushBlock(CmiIpcBlock* block) {
   return pushBlock_(queue, block->orig, shared);
 }
 
-CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) throw(std::bad_alloc) {
+CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
   auto myPe = CmiMyPe();
   auto myRank = CmiPhysicalRank(myPe);
   auto myNode = CmiPhysicalNodeID(myPe);
@@ -113,6 +116,9 @@ void CmiFreeBlock(CmiIpcBlock* block) {
 
 CmiIpcBlock* CmiIsBlock(void* addr) {
   auto& meta = CsvAccess(metadata_);
+  if (!metadataReady_(meta)) {
+    return nullptr;
+  }
   auto& shared = meta->shared[meta->mine];
   auto* begin = (char*)shared;
   auto* end = begin + shared->max;
@@ -124,7 +130,7 @@ CmiIpcBlock* CmiIsBlock(void* addr) {
 }
 
 static std::uintptr_t allocBlock_(ipc_shared_* meta,
-                                  std::size_t size) throw(std::bad_alloc) {
+                                  std::size_t size) {
   auto res = meta->heap.exchange(cmi::ipc::nil, std::memory_order_acquire);
   if (res == cmi::ipc::nil) {
     return cmi::ipc::nil;
