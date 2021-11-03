@@ -15,6 +15,7 @@ void* null_merge_fn(int* size, void* local, void** remote, int count) {
 
 struct test_msg_ {
   char core[CmiMsgHeaderSizeBytes];
+  int target;
   inline char* payload(void);
 };
 
@@ -46,12 +47,16 @@ void check_done(bool receiving) {
 }
 
 void block_handler(void* msg) {
+  auto thisPe = CmiMyPe();
   auto* tmsg = (test_msg_*)msg;
-  CmiPrintf("%d> got message: %s\n", CmiMyPe(), tmsg->payload());
+  CmiAssert(thisPe == tmsg->target);
+  CmiPrintf("%d> got message: %s\n", thisPe, tmsg->payload());
   // TODO ( determine how to support: CmiFree(msg) )
   auto* blk = CmiMsgToBlock(msg);
-  CmiAssert(blk != nullptr);
-  CmiFreeBlock(blk);
+  if (blk)
+    CmiFreeBlock(blk);
+  else
+    CmiFree(msg);
   // check if we're done
   check_done(true);
 }
@@ -87,21 +92,29 @@ void test_thread(void*) {
     }
 
     auto len = snprintf(NULL, 0, "(hello %d from %d!)", imsg, pe);
-    auto totalSize = len + sizeof(CmiChunkHeader) + sizeof(test_msg_);
-    // allocate a block message from the IPC pool
-    CmiIpcBlock* block;
-    while ((block = CmiAllocBlock(peer, totalSize)) == nullptr)
-      ;
-    // actively convert the block to a message
-    auto* msg = (test_msg_*)CmiBlockToMsg(block, true);
-    // prepare its payload/set the handler
+    auto totalSize = sizeof(test_msg_) + len;
+    auto* msg = (test_msg_*)CmiAlloc(totalSize);
+
     sprintf(msg->payload(), "(hello %d from %d!)", imsg, pe);
     CmiSetHandler(msg, CpvAccess(handle_block));
-    // cache before we push to retain translation
-    CmiCacheBlock(block);
-    // then push it onto the receiver's queue
-    while (!CmiPushBlock(block))
-      ;
+    msg->target = peer;
+
+    CmiIpcBlock* block = nullptr;
+    try {
+      block = CmiMsgToBlock((char*)msg, totalSize, CmiNodeOf(peer),
+                            CmiRankOf(peer));
+    } catch (std::bad_alloc) {
+    }
+
+    if (block) {
+      // cache before we push to retain translation
+      CmiCacheBlock(block);
+      // then push it onto the receiver's queue
+      while (!CmiPushBlock(block))
+        ;
+    } else {
+      CmiSyncSendAndFree(peer, totalSize, (char*)msg);
+    }
     // yield to allow the handler to get invoked
     unsigned int prio = 1;  // LOW PRIORITY
     CthYieldPrio(CQS_QUEUEING_IFIFO, 0, &prio);

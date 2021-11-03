@@ -56,7 +56,7 @@ struct ipc_metadata_ {
   // physical node rank
   int mine;
   // base constructor
-  ipc_metadata_(void) : mine(CmiPhysicalRank(CmiMyPe()) / CmiMyNodeSize()) {}
+  ipc_metadata_(void) : mine(CmiMyNode()) {}
   // virtual destructor may be needed
   virtual ~ipc_metadata_() {}
 };
