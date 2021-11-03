@@ -36,15 +36,15 @@ struct ipc_xpmem_metadata_ : public ipc_metadata_ {
   // create our local shared data
   ipc_xpmem_metadata_(void) { this->shared[this->mine] = makeIpcShared_(); }
 
-  void put_segment(int rank, const xpmem_segid_t& segid) {
-    auto ins = this->segments.emplace(rank, segid);
+  void put_segment(int proc, const xpmem_segid_t& segid) {
+    auto ins = this->segments.emplace(proc, segid);
     CmiAssert(ins.second);
   }
 
-  xpmem_segid_t get_segment(int rank) {
-    auto search = this->segments.find(rank);
+  xpmem_segid_t get_segment(int proc) {
+    auto search = this->segments.find(proc);
     if (search == std::end(this->segments)) {
-      if (mine == rank) {
+      if (mine == proc) {
         auto segid =
             xpmem_make(0, XPMEM_MAXADDR_SIZE, XPMEM_PERMIT_MODE, (void*)0666);
         this->put_segment(mine, segid);
@@ -57,8 +57,8 @@ struct ipc_xpmem_metadata_ : public ipc_metadata_ {
     }
   }
 
-  xpmem_apid_t get_instance(int rank) {
-    auto segid = this->get_segment(rank);
+  xpmem_apid_t get_instance(int proc) {
+    auto segid = this->get_segment(proc);
     if (segid >= 0) {
       auto search = this->instances.find(segid);
       if (search == std::end(this->instances)) {
@@ -75,14 +75,13 @@ struct ipc_xpmem_metadata_ : public ipc_metadata_ {
   }
 };
 
-void* translateAddr_(ipc_xpmem_metadata_* meta, int rank, void* remote_ptr,
+void* translateAddr_(ipc_xpmem_metadata_* meta, int proc, void* remote_ptr,
                      const std::size_t& size) {
   // TODO ( add support for SMP mode )
-  auto mine = meta->mine;
-  if (mine == rank) {
+  if (proc == meta->mine) {
     return remote_ptr;
   } else {
-    auto apid = meta->get_instance(rank);
+    auto apid = meta->get_instance(proc);
     CmiAssert(apid >= 0);
     // this magic was borrowed from VADER
     uintptr_t attach_align = 1 << 23;

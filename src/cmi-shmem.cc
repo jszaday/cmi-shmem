@@ -4,6 +4,13 @@
 #include "cmi-shm.cc"
 #endif
 
+#if CMK_SMP
+#define CMI_DEST_RANK(msg) ((CmiMsgHeaderBasic*)msg)->rank
+#if CMK_NODE_QUEUE_AVAILABLE
+extern void CmiPushNode(void* msg);
+#endif
+#endif
+
 CpvExtern(int, CthResumeNormalThreadIdx);
 
 inline std::size_t whichBin_(std::size_t size);
@@ -11,8 +18,7 @@ inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base);
 inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
                               std::uintptr_t value, void* base);
-static std::uintptr_t allocBlock_(ipc_shared_* meta,
-                                  std::size_t size);
+static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size);
 
 void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
   auto* msg = CmiBlockToMsg(block);
@@ -26,16 +32,55 @@ void* CmiBlockToMsg(CmiIpcBlock* block, bool init) {
   return msg;
 }
 
+CmiIpcBlock* CmiMsgToBlock(char* src, std::size_t len, int node, int rank,
+                           int timeout) {
+  char* dst;
+  CmiIpcBlock* block;
+  if ((block = CmiIsBlock(src)) && (node == block->src)) {
+    dst = src;
+  } else {
+    if (timeout > 0) {
+      while (--timeout &&
+             !(block = CmiAllocBlock(node, len + sizeof(CmiChunkHeader))))
+        ;
+    } else {
+      // don't give up!
+      while (!(block = CmiAllocBlock(node, len + sizeof(CmiChunkHeader))))
+        ;
+    }
+    if (block == nullptr) {
+      return nullptr;
+    } else {
+      dst = (char*)CmiBlockToMsg(block, true);
+      memcpy(dst, src, len);
+      CmiFree(src);
+    }
+  }
+#if CMK_SMP
+  CMI_DEST_RANK(dst) = rank;
+#endif
+  return block;
+}
+
+void CmiDeliverBlockMsg(CmiIpcBlock* block) {
+  auto* msg = CmiBlockToMsg(block);
+#if CMK_SMP
+  auto& rank = CMI_DEST_RANK(msg);
+#if CMK_NODE_QUEUE_AVAILABLE
+  if (rank == cmi::ipc::nodeDatagram) {
+    CmiPushNode(msg);
+  } else
+#endif
+    CmiPushPE(rank, msg);
+#else
+  CmiHandleMessage(msg);
+#endif
+}
+
 static void CmiHandleBlock_(void*, double) {
   auto* block = CmiPopBlock();
   if (block != nullptr) {
-    auto* msg = CmiBlockToMsg(block);
-#if CMK_SMP
-    auto dst = block->dst % CmiMyNodeSize();
-    CmiPushPE(dst, msg);
-#else
-    CmiHandleMessage(msg);
-#endif
+    CmiDeliverBlockMsg(block);
   }
 }
 
@@ -61,26 +106,27 @@ CmiIpcBlock* CmiPopBlock(void) {
 
 bool CmiPushBlock(CmiIpcBlock* block) {
   auto& meta = CsvAccess(metadata_);
-  auto& shared = meta->shared[block->src / CmiMyNodeSize()];
+  auto& shared = meta->shared[block->src];
   auto& queue = shared->queue;
-#if CMK_SMP
-  auto mine = CmiPhysicalRank(CmiMyPe());
-  CmiAssert(mine == block->dst);
-#else
   CmiAssert(meta->mine == block->dst);
-#endif
   return pushBlock_(queue, block->orig, shared);
 }
 
-CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
-  auto myPe = CmiMyPe();
-  auto myRank = CmiPhysicalRank(myPe);
-  auto myNode = CmiPhysicalNodeID(myPe);
-  auto theirRank = CmiPhysicalRank(pe);
-  auto theirNode = CmiPhysicalNodeID(pe);
-  CmiAssert((myRank != theirRank) && (myNode == theirNode));
+CmiIpcBlock* CmiAllocBlock(int dstProc, std::size_t size) {
+  auto dstNode = CmiPhysicalNodeID(CmiNodeFirst(dstProc));
+#if CMK_SMP
+  auto thisPe = CmiInCommThread() ? CmiNodeFirst(CmiMyNode()) : CmiMyPe();
+#else
+  auto thisPe = CmiMyPe();
+#endif
+  auto thisProc = CmiMyNode();
+  auto thisNode = CmiPhysicalNodeID(thisPe);
+  if ((thisProc == dstProc) || (thisNode != dstNode)) {
+    throw std::bad_alloc();
+  }
+
   auto& meta = CsvAccess(metadata_);
-  auto& shared = meta->shared[theirRank / CmiMyNodeSize()];
+  auto& shared = meta->shared[dstProc];
   auto bin = whichBin_(size);
   CmiAssert(bin < kNumCutOffPoints);
 
@@ -98,8 +144,8 @@ CmiIpcBlock* CmiAllocBlock(int pe, std::size_t size) {
     new (block) CmiIpcBlock(totalSize, offset);
   }
 
-  block->src = theirRank;
-  block->dst = myRank;
+  block->src = dstProc;
+  block->dst = thisProc;
 
   return block;
 }
@@ -108,7 +154,7 @@ void CmiFreeBlock(CmiIpcBlock* block) {
   auto& meta = CsvAccess(metadata_);
   auto bin = whichBin_(block->size);
   CmiAssertMsg(bin < kNumCutOffPoints);
-  auto& shared = meta->shared[block->src / CmiMyNodeSize()];
+  auto& shared = meta->shared[block->src];
   auto& free = shared->free[bin];
   while (!pushBlock_(free, block->orig, shared))
     ;
@@ -129,8 +175,7 @@ CmiIpcBlock* CmiIsBlock(void* addr) {
   }
 }
 
-static std::uintptr_t allocBlock_(ipc_shared_* meta,
-                                  std::size_t size) {
+static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
   auto res = meta->heap.exchange(cmi::ipc::nil, std::memory_order_acquire);
   if (res == cmi::ipc::nil) {
     return cmi::ipc::nil;
