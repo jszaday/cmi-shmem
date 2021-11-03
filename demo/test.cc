@@ -92,7 +92,7 @@ void test_thread(void*) {
     }
 
     auto len = snprintf(NULL, 0, "(hello %d from %d!)", imsg, pe);
-    auto totalSize = sizeof(test_msg_) + len;
+    auto totalSize = sizeof(test_msg_) + len + 1; // plus one for '\0'
     auto* msg = (test_msg_*)CmiAlloc(totalSize);
 
     sprintf(msg->payload(), "(hello %d from %d!)", imsg, pe);
