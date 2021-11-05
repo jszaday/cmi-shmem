@@ -1,14 +1,14 @@
 #ifndef CMI_SHMEM_HH
 #define CMI_SHMEM_HH
 
-#include <converse.h>
-
 #include <atomic>
 #include <cstdint>
 #include <limits>
 
 namespace cmi {
 namespace ipc {
+// recommended cutoff for block sizes
+CpvExtern(std::size_t, kRecommendedCutoff);
 // used to represent an empty linked list
 constexpr auto nil = std::uintptr_t(0);
 // used to represent the tail of a linked list
@@ -86,5 +86,10 @@ CmiIpcBlock* CmiMsgToBlock(char* msg, std::size_t len, int node,
 
 // deliver a block as a message
 void CmiDeliverBlockMsg(CmiIpcBlock*);
+
+inline const std::size_t& CmiRecommendedBlockCutoff(void) {
+  using namespace cmi::ipc;
+  return CpvAccess(kRecommendedCutoff);
+}
 
 #endif

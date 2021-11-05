@@ -124,8 +124,6 @@ static void handleInitialize_(void* msg) {
 void CmiInitIpcMetadata(char** argv, CthThread th) {
   initSleepers_();
   initSegmentSize_(argv);
-  CmiInitCPUAffinity(argv);
-  CmiInitCPUTopology(argv);
   CmiNodeAllBarrier();
 
   putSleeper_(th);

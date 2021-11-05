@@ -146,6 +146,9 @@ void test_init(int argc, char** argv) {
 #else
   auto* th = CthCreate(test_thread, nullptr, 0);
 #endif
+  // init cpu topology
+  CmiInitCPUAffinity(argv);
+  CmiInitCPUTopology(argv);
   // initialize ipc metadata
   CmiInitIpcMetadata(argv, th);
   // enable receving blocks as (converse) messages
