@@ -196,14 +196,17 @@ static void nodePidHandler_(void* msg) {
   CmiSyncSendAndFree(root, CmiMsgHeaderSizeBytes, (char*)msg);
 }
 
-void CmiInitIpcMetadata(char** argv, CthThread th) {
-  CpvInitialize(int, num_cbs_recvd);
-  CpvInitialize(int, num_cbs_exptd);
-  CpvAccess(num_cbs_recvd) = CpvAccess(num_cbs_exptd) = 0;
+void CmiInitIpc(char** argv) {
   CpvInitialize(int, handle_callback);
   CpvAccess(handle_callback) = CmiRegisterHandler(callbackHandler_);
   CpvInitialize(int, handle_node_pid);
   CpvAccess(handle_node_pid) = CmiRegisterHandler(nodePidHandler_);
+}
+
+CmiIpcManager *CmiIpcManager::make_manager(CthThread th) {
+  CpvInitialize(int, num_cbs_recvd);
+  CpvInitialize(int, num_cbs_exptd);
+  CpvAccess(num_cbs_recvd) = CpvAccess(num_cbs_exptd) = 0;
 
   initSleepers_();
   initSegmentSize_(argv);
