@@ -28,9 +28,8 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     1048576,   2097152,   4194304,   8388608,   16777216, 33554432, 67108864,
     134217728, 268435456, 536870912, 1073741824};
 
-struct ipc_metadata_;
-using ipc_metadata_ptr_ = std::unique_ptr<ipc_metadata_>;
-CsvStaticDeclare(ipc_metadata_ptr_, metadata_);
+using ipc_managers_ = std::vector<std::unique_ptr<CmiIpcManager>>;
+CsvStaticDeclare(ipc_managers_, managers_);
 
 #if CMK_SMP
 CsvStaticDeclare(CmiNodeLock, sleeper_lock);
@@ -41,13 +40,13 @@ CsvStaticDeclare(sleeper_map_t, sleepers);
 
 // the data each pe shares with its peers
 // contains pool of free blocks, heap, and receive queue
-struct ipc_shared_ {
+struct CmiIpcShared {
   std::array<std::atomic<std::uintptr_t>, kNumCutOffPoints> free;
   std::atomic<std::uintptr_t> queue;
   std::atomic<std::uintptr_t> heap;
   std::uintptr_t max;
 
-  ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
+  CmiIpcShared(std::uintptr_t begin, std::uintptr_t end)
       : queue(cmi::ipc::max), heap(begin), max(end) {
     for (auto& f : this->free) {
       f.store(cmi::ipc::max);
@@ -55,31 +54,19 @@ struct ipc_shared_ {
   }
 };
 
-// shared data for each pe
-struct ipc_metadata_ {
-  // maps ranks to shared segments
-  std::map<int, ipc_shared_*> shared;
-  // physical node rank
-  int mine;
-  // base constructor
-  ipc_metadata_(void) : mine(CmiMyNode()) {}
-  // virtual destructor may be needed
-  virtual ~ipc_metadata_() {}
-};
-
 inline std::size_t whichBin_(std::size_t size);
 
-inline static void initIpcShared_(ipc_shared_* shared) {
-  auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
-                                (sizeof(ipc_shared_) % ALIGN_BYTES));
+inline static void initIpcShared_(CmiIpcShared* shared) {
+  auto begin = (std::uintptr_t)(sizeof(CmiIpcShared) +
+                               (sizeof(CmiIpcShared) % ALIGN_BYTES));
   CmiAssert(begin != cmi::ipc::nil);
   auto end = begin + CpvAccess(kSegmentSize);
-  new (shared) ipc_shared_(begin, end);
+  new (shared) CmiIpcShared(begin, end);
 }
 
-inline static ipc_shared_* makeIpcShared_(void) {
-  auto* shared = (ipc_shared_*)(::operator new(sizeof(ipc_shared_) +
-                                               CpvAccess(kSegmentSize)));
+inline static CmiIpcShared* makeIpcShared_(void) {
+  auto* shared = (CmiIpcShared*)(::operator new(sizeof(CmiIpcShared) +
+                                                CpvAccess(kSegmentSize)));
   initIpcShared_(shared);
   return shared;
 }

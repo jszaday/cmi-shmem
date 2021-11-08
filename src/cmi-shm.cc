@@ -31,10 +31,10 @@ struct pid_message_ {
 #define CMI_SHARED_FMT "cmi_pid%lu_node%d_shared_"
 
 // opens a shared memory segment for a given physical rank
-static std::pair<int, ipc_shared_*> openShared_(int node) {
+static std::pair<int, CmiIpcShared*> openShared_(int node) {
   // determine the size of the shared segment
   // (adding the size of the queues and what nots)
-  auto size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
+  auto size = CpvAccess(kSegmentSize) + sizeof(CmiIpcShared);
   // generate a name for this pe
   auto slen = snprintf(NULL, 0, CMI_SHARED_FMT, CsvAccess(node_pid), node);
   auto name = new char[slen];
@@ -55,14 +55,14 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
   // then delete the name
   delete[] name;
   // map the segment to an address:
-  auto* res = (ipc_shared_*)mmap(nullptr, size, PROT_READ | PROT_WRITE,
+  auto* res = (CmiIpcShared*)mmap(nullptr, size, PROT_READ | PROT_WRITE,
                                  MAP_SHARED, fd, 0);
   CmiAssert(res != MAP_FAILED);
   // return the file descriptor/shared
   return std::make_pair(fd, res);
 }
 
-struct ipc_shm_metadata_ : public ipc_metadata_ {
+struct ipc_shm_metadata_ : public CmiIpcManager {
   std::map<int, int> fds;
 
   ipc_shm_metadata_(void) {
