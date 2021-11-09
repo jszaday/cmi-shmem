@@ -103,7 +103,8 @@ void* translateAddr_(CmiIpcManager* meta, int proc, void* remote_ptr,
 
 static void handleInitialize_(void* msg) {
   auto* imsg = (init_msg_*)msg;
-  auto* meta = (CmiIpcManager*)CsvAccess(metadata_).get();
+  // TODO ( this should be key-based! )
+  auto* meta = CsvAccess(managers_).back().get();
   // extract the segment id and shared region
   // from the msg (registering it in our metadata)
   meta->put_segment(imsg->from, imsg->segid);
@@ -140,7 +141,7 @@ CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
     CsvInitialize(ipc_manager_map_, managers_);
     auto key = CsvAccess(managers_).size() + 1;
     meta = new CmiIpcManager(key);
-    CsvAccess(managers_).emplace_back(manager);
+    CsvAccess(managers_).emplace_back(meta);
   } else {
 #if CMK_SMP
     CmiNodeAllBarrier();
