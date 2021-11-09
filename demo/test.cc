@@ -8,6 +8,7 @@ CpvDeclare(int, send_count);
 CpvDeclare(int, recv_count);
 CpvDeclare(int, handle_exit);
 CpvDeclare(int, handle_block);
+CpvDeclare(CmiIpcManager*, manager);
 
 void* null_merge_fn(int* size, void* local, void** remote, int count) {
   return local;
@@ -52,9 +53,9 @@ void block_handler(void* msg) {
   CmiAssert(thisPe == tmsg->target);
   CmiPrintf("%d> got message: %s\n", thisPe, tmsg->payload());
   // TODO ( determine how to support: CmiFree(msg) )
-  auto* blk = CmiMsgToBlock(msg);
+  auto* blk = CmiMsgToBlock(CpvAccess(manager), msg);
   if (blk)
-    CmiFreeBlock(blk);
+    CmiFreeBlock(CpvAccess(manager), blk);
   else
     CmiFree(msg);
   // check if we're done
@@ -92,7 +93,7 @@ void test_thread(void*) {
     }
 
     auto len = snprintf(NULL, 0, "(hello %d from %d!)", imsg, pe);
-    auto totalSize = sizeof(test_msg_) + len + 1; // plus one for '\0'
+    auto totalSize = sizeof(test_msg_) + len + 1;  // plus one for '\0'
     auto* msg = (test_msg_*)CmiAlloc(totalSize);
 
     sprintf(msg->payload(), "(hello %d from %d!)", imsg, pe);
@@ -101,8 +102,8 @@ void test_thread(void*) {
 
     CmiIpcBlock* block = nullptr;
     try {
-      block = CmiMsgToBlock((char*)msg, totalSize, CmiNodeOf(peer),
-                            CmiRankOf(peer));
+      block = CmiMsgToBlock(CpvAccess(manager), (char*)msg, totalSize,
+                            CmiNodeOf(peer), CmiRankOf(peer));
     } catch (std::bad_alloc) {
     }
 
@@ -110,7 +111,7 @@ void test_thread(void*) {
       // cache before we push to retain translation
       CmiCacheBlock(block);
       // then push it onto the receiver's queue
-      while (!CmiPushBlock(block))
+      while (!CmiPushBlock(CpvAccess(manager), block))
         ;
     } else {
       CmiSyncSendAndFree(peer, totalSize, (char*)msg);
@@ -126,6 +127,19 @@ void test_thread(void*) {
     CmiAssert(nSent == CpvAccess(send_count));
 
     check_done(false);
+  }
+}
+
+static void CmiHandleBlock_(void*, double) {
+  auto* block = CmiPopBlock(CpvAccess(manager));
+  if (block != nullptr) {
+    CmiDeliverBlockMsg(block);
+  }
+}
+
+void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP) {
+  if (CmiMyRank() == 0) {
+    CcdCallOnConditionKeep(cond, CmiHandleBlock_, nullptr);
   }
 }
 
@@ -149,8 +163,11 @@ void test_init(int argc, char** argv) {
   // init cpu topology
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
+  CmiInitIpc(argv);
+  CmiNodeAllBarrier();
   // initialize ipc metadata
-  CmiInitIpcMetadata(argv, th);
+  CpvInitialize(CmiIpcManager*, manager);
+  CpvAccess(manager) = CmiMakeIpcManager(th);
   // enable receving blocks as (converse) messages
   CmiIpcBlockCallback();
 }

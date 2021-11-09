@@ -44,26 +44,29 @@ struct CmiIpcBlock {
   char padding[(sizeof(blockSizeHelper_) % ALIGN_BYTES)];
 };
 
-void CmiInitIpcMetadata(char** argv, CthThread th);
-void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP);
+struct CmiIpcManager;
 
-bool CmiPushBlock(CmiIpcBlock*);
-CmiIpcBlock* CmiPopBlock(void);
+void CmiInitIpc(char** argv);
+CmiIpcManager* CmiMakeIpcManager(CthThread th);
+// void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP);
+
+bool CmiPushBlock(CmiIpcManager*, CmiIpcBlock*);
+CmiIpcBlock* CmiPopBlock(CmiIpcManager*);
 
 // tries to allocate a block, returning null if unsucessful
 // (fails when other PEs are contending resources)
 // note: throws bad_alloc if we ran out of memory
-CmiIpcBlock* CmiAllocBlock(int node, std::size_t size);
+CmiIpcBlock* CmiAllocBlock(CmiIpcManager*, int node, std::size_t size);
 
 // frees a block -- enabling it to be used again
-void CmiFreeBlock(CmiIpcBlock*);
+void CmiFreeBlock(CmiIpcManager*, CmiIpcBlock*);
 
 // currently a no-op but may be eventually usable
 // intended to "capture" blocks from remote pes
 inline void CmiCacheBlock(CmiIpcBlock*) { return; }
 
 // identifies whether a void* is the payload of a block
-CmiIpcBlock* CmiIsBlock(void*);
+CmiIpcBlock* CmiIsBlock(CmiIpcManager*, void*);
 
 // if (init) is true -- initializes the
 // memory segment for use as a message
@@ -75,12 +78,12 @@ inline void* CmiBlockToMsg(CmiIpcBlock* block) {
   return (void*)res;
 }
 
-inline CmiIpcBlock* CmiMsgToBlock(void* msg) {
-  return CmiIsBlock((char*)msg - sizeof(CmiChunkHeader));
+inline CmiIpcBlock* CmiMsgToBlock(CmiIpcManager* manager, void* msg) {
+  return CmiIsBlock(manager, (char*)msg - sizeof(CmiChunkHeader));
 }
 
 // note -- can throw std::bad_alloc if out of memory
-CmiIpcBlock* CmiMsgToBlock(char* msg, std::size_t len, int node,
+CmiIpcBlock* CmiMsgToBlock(CmiIpcManager*, char* msg, std::size_t len, int node,
                            int rank = cmi::ipc::nodeDatagram,
                            int timeout = cmi::ipc::defaultTimeout);
 
