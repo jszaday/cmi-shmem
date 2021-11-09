@@ -121,7 +121,7 @@ static void handleInitialize_(void* msg) {
   }
 }
 
-void CmiInitIpcMetadata(char** argv, CthThread th) {
+void CmiInitializeIpcMetadata(char** argv, CthThread th) {
   initSleepers_();
   initSegmentSize_(argv);
   CmiNodeAllBarrier();

@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#define DEBUGP(x) /* CmiPrintf x; */
+#define DEBUGP(x) CmiPrintf x;
 
 namespace cmi {
 namespace ipc {
@@ -30,13 +30,6 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
 
 using ipc_managers_ = std::vector<std::unique_ptr<CmiIpcManager>>;
 CsvStaticDeclare(ipc_managers_, managers_);
-
-#if CMK_SMP
-CsvStaticDeclare(CmiNodeLock, sleeper_lock);
-#endif
-
-using sleeper_map_t = std::vector<CthThread>;
-CsvStaticDeclare(sleeper_map_t, sleepers);
 
 // the data each pe shares with its peers
 // contains pool of free blocks, heap, and receive queue
@@ -61,6 +54,7 @@ inline static void initIpcShared_(CmiIpcShared* shared) {
                                (sizeof(CmiIpcShared) % ALIGN_BYTES));
   CmiAssert(begin != cmi::ipc::nil);
   auto end = begin + CpvAccess(kSegmentSize);
+  CmiPrintf("init'ing shared on %d\n", CmiMyPe());
   new (shared) CmiIpcShared(begin, end);
 }
 
@@ -90,32 +84,5 @@ inline void initSegmentSize_(char** argv) {
     CpvAccess(kRecommendedCutoff) = kCutOffPoints[(bin >= 0) ? bin : 0];
   }
 }
-
-inline static void initSleepers_(void) {
-  if (CmiMyRank() == 0) {
-    CsvInitialize(sleeper_map_t, sleepers);
-    CsvAccess(sleepers).resize(CmiMyNodeSize());
-#if CMK_SMP
-    CsvInitialize(CmiNodeLock, sleeper_lock);
-    CsvAccess(sleeper_lock) = CmiCreateLock();
-#endif
-  }
-}
-
-inline static void putSleeper_(CthThread th) {
-#if CMK_SMP
-  if (CmiInCommThread()) {
-    return;
-  }
-  CmiLock(CsvAccess(sleeper_lock));
-#endif
-  (CsvAccess(sleepers))[CmiMyRank()] = th;
-#if CMK_SMP
-  // CmiAssert(!th || !CthIsMainThread(th));
-  CmiUnlock(CsvAccess(sleeper_lock));
-#endif
-}
-
-static void awakenSleepers_(void);
 
 #endif

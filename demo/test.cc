@@ -8,6 +8,7 @@ CpvDeclare(int, send_count);
 CpvDeclare(int, recv_count);
 CpvDeclare(int, handle_exit);
 CpvDeclare(int, handle_block);
+CpvDeclare(CmiIpcManager*, manager);
 
 void* null_merge_fn(int* size, void* local, void** remote, int count) {
   return local;
@@ -46,15 +47,30 @@ void check_done(bool receiving) {
   }
 }
 
+void deliver_block(void* obj, double) {
+  auto* mgr = (CmiIpcManager*)obj;
+  if (auto* block = mgr->dequeue()) {
+    CmiAssert(mgr == CpvAccess(manager));
+    CmiAssert(mgr->is_block(block));
+    auto* msg = (char*)CmiBlockToMsg(block);
+    CmiAssert(mgr->message_to_block(msg) != nullptr);
+    CmiPrintf("%d> got a message (%p) belonging to: %p\n", CmiMyPe(), msg, mgr);
+    CmiDeliverBlockMsg(block);
+  }
+}
+
 void block_handler(void* msg) {
   auto thisPe = CmiMyPe();
+  auto* manager = CpvAccess(manager);
   auto* tmsg = (test_msg_*)msg;
   CmiAssert(thisPe == tmsg->target);
+  CmiPrintf("%d> inside handler with msg (%p) and mgr (%p).\n", CmiMyPe(), msg, manager);
   CmiPrintf("%d> got message: %s\n", thisPe, tmsg->payload());
   // TODO ( determine how to support: CmiFree(msg) )
-  auto* blk = CmiMsgToBlock(msg);
+  auto* blk = manager->message_to_block((char*)msg);
+  // CmiAssert(CMK_SMP || blk);
   if (blk)
-    CmiFreeBlock(blk);
+    manager->deallocate(blk);
   else
     CmiFree(msg);
   // check if we're done
@@ -66,6 +82,7 @@ void test_thread(void*) {
   auto rank = CmiPhysicalRank(pe);
   auto node = CmiPhysicalNodeID(pe);
   auto nPes = CmiNumPesOnPhysicalNode(node);
+  auto* manager = CpvAccess(manager);
   // determine the number of iters to run for
   auto nIters = (nPes > 1) ? nMsgs : 0;
   if (nIters) {
@@ -101,16 +118,15 @@ void test_thread(void*) {
 
     CmiIpcBlock* block = nullptr;
     try {
-      block = CmiMsgToBlock((char*)msg, totalSize, CmiNodeOf(peer),
-                            CmiRankOf(peer));
+      while (!(block = manager->message_to_block((char*)msg, totalSize, CmiNodeOf(peer), CmiRankOf(peer))));
     } catch (std::bad_alloc) {
     }
 
     if (block) {
       // cache before we push to retain translation
-      CmiCacheBlock(block);
+      // CmiCacheBlock(block);
       // then push it onto the receiver's queue
-      while (!CmiPushBlock(block))
+      while (!manager->enqueue(block))
         ;
     } else {
       CmiSyncSendAndFree(peer, totalSize, (char*)msg);
@@ -150,9 +166,11 @@ void test_init(int argc, char** argv) {
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
   // initialize ipc metadata
-  CmiInitIpcMetadata(argv, th);
+  CmiInitializeIpc(argv);
+  CpvInitialize(CmiIpcManager*, manager);
+  CpvAccess(manager) = CmiIpcManager::make_manager(th);
   // enable receving blocks as (converse) messages
-  CmiIpcBlockCallback();
+  CcdCallOnConditionKeep(CcdSCHEDLOOP, deliver_block, CpvAccess(manager));
 }
 
 int main(int argc, char** argv) { ConverseInit(argc, argv, test_init, 0, 0); }

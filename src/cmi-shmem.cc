@@ -213,10 +213,9 @@ inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
   return true;
 }
 
-static void awakenSleepers_(void) {
-  auto& sleepers = CsvAccess(sleepers);
-  for (auto i = 0; i < sleepers.size(); i++) {
-    auto& th = sleepers[i];
+void CmiIpcManager::awaken_sleepers(void) {
+  for (auto i = 0; i < this->sleepers.size(); i++) {
+    auto& th = this->sleepers[i];
     if (i == CmiMyRank()) {
       CthAwaken(th);
     } else {
@@ -225,4 +224,11 @@ static void awakenSleepers_(void) {
       CmiPushPE(i, token);
     }
   }
+}
+
+CmiIpcManager* CmiIpcManager::get_manager(std::size_t key) {
+  CmiAssertMsg(key > 0, "key must be non-zero!");
+  auto* res = ((CsvAccess(managers_))[key - 1]).get();
+  CmiAssertMsg(res != nullptr, "unable to get manager!");
+  return res;
 }

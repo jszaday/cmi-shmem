@@ -52,13 +52,18 @@ struct CmiIpcBlock {
 struct CmiIpcShared;
 
 struct CmiIpcManager {
- protected:
   // api key of this instance
-  CmiApiKey key;
+  const std::size_t key;
   // node number of issuer
-  int mine;
+  const int mine;
+ protected:
   // maps nodes to shared segments
   std::map<int, CmiIpcShared*> shared;
+  // threads waiting on init to complete
+  std::vector<CthThread> sleepers;
+#if CMK_SMP
+  CmiNodeLock lock;
+#endif
   // default constructor
   CmiIpcManager(CmiApiKey key_) : key(key_), mine(CmiMyNode()) {}
  public:
@@ -77,7 +82,7 @@ struct CmiIpcManager {
     return this->is_block(BLKSTART(msg));
   }
 
-  inline CmiIpcBlock* message_to_block(
+  CmiIpcBlock* message_to_block(
     char* msg, std::size_t len, int node,
     int rank = cmi::ipc::nodeDatagram,
     int timeout = cmi::ipc::defaultTimeout
@@ -86,13 +91,16 @@ struct CmiIpcManager {
   // call this in the same order on all PEs --
   // out of order calls will result in undefined behavior!
   static CmiIpcManager* make_manager(CthThread th);
+
+  static CmiIpcManager* get_manager(std::size_t key);
+
+ protected:
+  void awaken_sleepers(void);
+
+  void put_sleeper(CthThread th) { this->sleepers.push_back(th); }
 };
 
-void CmiInitIpc(char** argv);
-
-CmiIpcManager* CmiGetIpcManager(cmi::ipc::api_key_t);
-
-void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP);
+void CmiInitializeIpc(char** argv);
 
 // if (init) is true -- initializes the
 // memory segment for use as a message
