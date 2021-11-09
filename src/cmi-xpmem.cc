@@ -17,6 +17,8 @@ extern "C" {
 #define OPAL_ALIGN_PAD_AMOUNT(x, s) \
   ((~((uintptr_t)(x)) + 1) & ((uintptr_t)(s)-1))
 
+CpvStaticDeclare(int, handle_init);
+
 struct init_msg_ {
   char core[CmiMsgHeaderSizeBytes];
   std::size_t key;
@@ -124,11 +126,17 @@ static void handleInitialize_(void* msg) {
   }
 }
 
-CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
+void CmiInitIpc(char** argv) {
+  CsvInitialize(ipc_manager_map_, managers_);
+
   initSleepers_();
   initSegmentSize_(argv);
-  CmiNodeAllBarrier();
 
+  CpvInitialize(int, handle_init);
+  CpvAccess(handle_init) = CmiRegisterHandler(handleInitialize_);
+}
+
+CmiIpcManager* CmiMakeIpcManager(CthThread th) {
   putSleeper_(th);
 
 #if CMK_SMP
@@ -138,7 +146,6 @@ CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
 
   CmiIpcManager* meta;
   if (CmiMyRank() == 0) {
-    CsvInitialize(ipc_manager_map_, managers_);
     auto key = CsvAccess(managers_).size() + 1;
     meta = new CmiIpcManager(key);
     CsvAccess(managers_).emplace_back(meta);
@@ -159,9 +166,8 @@ CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
   meta->nPeers = nProcs;
 
   if (nProcs > 1) {
-    auto initHdl = CmiRegisterHandler(handleInitialize_);
     auto* imsg = (init_msg_*)CmiAlloc(sizeof(init_msg_));
-    CmiSetHandler(imsg, initHdl);
+    CmiSetHandler(imsg, CpvAccess(handle_init));
     imsg->key = meta->key;
     imsg->from = meta->mine;
     imsg->segid = meta->get_segment(meta->mine);

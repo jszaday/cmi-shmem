@@ -46,7 +46,8 @@ struct CmiIpcBlock {
 
 struct CmiIpcManager;
 
-CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th);
+void CmiInitIpc(char** argv);
+CmiIpcManager* CmiMakeIpcManager(CthThread th);
 // void CmiIpcBlockCallback(int cond = CcdSCHEDLOOP);
 
 bool CmiPushBlock(CmiIpcManager*, CmiIpcBlock*);

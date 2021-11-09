@@ -199,18 +199,22 @@ static void nodePidHandler_(void* msg) {
   CmiSyncSendAndFree(root, sizeof(pid_message_), (char*)msg);
 }
 
-CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
+void CmiInitIpc(char** argv) {
+  CsvInitialize(ipc_manager_map_, managers_);
+
+  initSleepers_();
+  initSegmentSize_(argv);
+
   CpvInitialize(int, num_cbs_recvd);
   CpvInitialize(int, num_cbs_exptd);
-  CpvAccess(num_cbs_recvd) = CpvAccess(num_cbs_exptd) = 0;
   CpvInitialize(int, handle_callback);
   CpvAccess(handle_callback) = CmiRegisterHandler(callbackHandler_);
   CpvInitialize(int, handle_node_pid);
   CpvAccess(handle_node_pid) = CmiRegisterHandler(nodePidHandler_);
+}
 
-  initSleepers_();
-  initSegmentSize_(argv);
-  CmiNodeAllBarrier();
+CmiIpcManager* CmiMakeIpcManager(CthThread th) {
+  CpvAccess(num_cbs_recvd) = CpvAccess(num_cbs_exptd) = 0;
 
   putSleeper_(th);
 
@@ -220,7 +224,6 @@ CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
 #endif
 
   if (CmiMyRank() == 0) {
-    CsvInitialize(ipc_manager_map_, managers_);
     auto key = CsvAccess(managers_).size() + 1;
     auto* manager = new CmiIpcManager(key);
     CsvAccess(managers_).emplace_back(manager);

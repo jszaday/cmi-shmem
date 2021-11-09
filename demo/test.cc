@@ -163,9 +163,11 @@ void test_init(int argc, char** argv) {
   // init cpu topology
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
+  CmiInitIpc(argv);
+  CmiNodeAllBarrier();
   // initialize ipc metadata
   CpvInitialize(CmiIpcManager*, manager);
-  CpvAccess(manager) = CmiInitIpcMetadata(argv, th);
+  CpvAccess(manager) = CmiMakeIpcManager(th);
   // enable receving blocks as (converse) messages
   CmiIpcBlockCallback();
 }
