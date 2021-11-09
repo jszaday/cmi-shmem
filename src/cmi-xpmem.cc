@@ -19,6 +19,7 @@ extern "C" {
 
 struct init_msg_ {
   char core[CmiMsgHeaderSizeBytes];
+  std::size_t key;
   int from;
   xpmem_segid_t segid;
   ipc_shared_* shared;
@@ -77,7 +78,7 @@ struct CmiIpcManager : public ipc_metadata_ {
   }
 };
 
-void* translateAddr_(CmiIpcManager* meta, int proc, void* remote_ptr,
+void* translateAddr_(ipc_manager_ptr_& meta, int proc, void* remote_ptr,
                      const std::size_t& size) {
   // TODO ( add support for SMP mode )
   if (proc == meta->mine) {
@@ -103,8 +104,7 @@ void* translateAddr_(CmiIpcManager* meta, int proc, void* remote_ptr,
 
 static void handleInitialize_(void* msg) {
   auto* imsg = (init_msg_*)msg;
-  // TODO ( this should be key-based! )
-  auto* meta = CsvAccess(managers_).back().get();
+  auto& meta = (CsvAccess(managers_))[(imsg->key - 1)];
   // extract the segment id and shared region
   // from the msg (registering it in our metadata)
   meta->put_segment(imsg->from, imsg->segid);
@@ -162,6 +162,7 @@ CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
     auto initHdl = CmiRegisterHandler(handleInitialize_);
     auto* imsg = (init_msg_*)CmiAlloc(sizeof(init_msg_));
     CmiSetHandler(imsg, initHdl);
+    imsg->key = meta->key;
     imsg->from = meta->mine;
     imsg->segid = meta->get_segment(meta->mine);
     imsg->shared = meta->shared[meta->mine];
