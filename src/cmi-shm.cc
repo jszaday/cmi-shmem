@@ -12,19 +12,18 @@
 #include <cmi-shmem-internal.hh>
 #include <memory>
 
-struct ipc_shm_metadata_;
-
 CpvStaticDeclare(int, num_cbs_recvd);
 CpvStaticDeclare(int, num_cbs_exptd);
 CpvStaticDeclare(int, handle_callback);
 CpvStaticDeclare(int, handle_node_pid);
 CsvStaticDeclare(pid_t, node_pid);
 
-static void openAllShared_(ipc_shm_metadata_*);
-static int sendPid_(void);
+static int sendPid_(CmiIpcManager*);
+static void openAllShared_(CmiIpcManager*);
 
 struct pid_message_ {
   char core[CmiMsgHeaderSizeBytes];
+  std::size_t key;
   pid_t pid;
 };
 
@@ -62,19 +61,19 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
   return std::make_pair(fd, res);
 }
 
-struct ipc_shm_metadata_ : public ipc_metadata_ {
+struct CmiIpcManager : public ipc_metadata_ {
   std::map<int, int> fds;
 
-  ipc_shm_metadata_(void) {
+  CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
     if (this->mine == 0) {
-      if (sendPid_() == 1) {
+      if (sendPid_(this) == 1) {
         openAllShared_(this);
         awakenSleepers_();
       }
     }
   }
 
-  virtual ~ipc_shm_metadata_() {
+  virtual ~CmiIpcManager() {
     auto& size = CpvAccess(kSegmentSize);
     // for each rank/descriptor pair
     for (auto& pair : this->fds) {
@@ -97,7 +96,7 @@ struct ipc_shm_metadata_ : public ipc_metadata_ {
   }
 };
 
-static void openAllShared_(ipc_shm_metadata_* meta) {
+static void openAllShared_(CmiIpcManager* meta) {
   int* pes;
   int nPes;
   int thisNode = CmiPhysicalNodeID(CmiMyPe());
@@ -147,12 +146,13 @@ int procBroadcastAndFree_(char* msg, std::size_t size) {
   return nProcs;
 }
 
-static int sendPid_(void) {
+static int sendPid_(CmiIpcManager* manager) {
   CsvInitialize(pid_t, node_pid);
   CsvAccess(node_pid) = getpid();
 
   auto* pmsg = (pid_message_*)CmiAlloc(sizeof(pid_message_));
   CmiSetHandler(pmsg, CpvAccess(handle_node_pid));
+  pmsg->key = manager->key;
   pmsg->pid = CsvAccess(node_pid);
 
   return procBroadcastAndFree_((char*)pmsg, sizeof(pid_message_));
@@ -162,6 +162,7 @@ static void callbackHandler_(void* msg) {
   int mine = CmiMyPe();
   int node = CmiPhysicalNodeID(mine);
   int first = CmiGetFirstPeOnPhysicalNode(node);
+  auto* pmsg = (pid_message_*)msg;
 
   if (mine == first) {
     // if we're still expecting messages:
@@ -174,14 +175,14 @@ static void callbackHandler_(void* msg) {
       // otherwise -- tell everyone we're ready!
       CmiPrintf("CMI> posix shm pool init'd with %luB segment.\n",
                 CpvAccess(kSegmentSize));
-      procBroadcastAndFree_((char*)msg, CmiMsgHeaderSizeBytes);
+      procBroadcastAndFree_((char*)msg, sizeof(pid_message_));
     }
   } else {
     CmiFree(msg);
   }
 
-  auto& meta = CsvAccess(metadata_);
-  openAllShared_((ipc_shm_metadata_*)meta.get());
+  auto& meta = (CsvAccess(managers_))[(pmsg->key - 1)];
+  openAllShared_(meta.get());
   awakenSleepers_();
 }
 
@@ -193,10 +194,10 @@ static void nodePidHandler_(void* msg) {
   int node = CmiPhysicalNodeID(CmiMyPe());
   int root = CmiGetFirstPeOnPhysicalNode(node);
   CmiSetHandler(msg, CpvAccess(handle_callback));
-  CmiSyncSendAndFree(root, CmiMsgHeaderSizeBytes, (char*)msg);
+  CmiSyncSendAndFree(root, sizeof(pid_message_), (char*)msg);
 }
 
-void CmiInitIpcMetadata(char** argv, CthThread th) {
+CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
   CpvInitialize(int, num_cbs_recvd);
   CpvInitialize(int, num_cbs_exptd);
   CpvAccess(num_cbs_recvd) = CpvAccess(num_cbs_exptd) = 0;
@@ -217,7 +218,20 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
 #endif
 
   if (CmiMyRank() == 0) {
-    CsvInitialize(ipc_metadata_ptr_, metadata_);
-    CsvAccess(metadata_).reset(new ipc_shm_metadata_);
+    CsvInitialize(ipc_manager_map_, managers_);
+    auto key = CsvAccess(managers_).size() + 1;
+    auto* manager = new CmiIpcManager(key);
+    CsvAccess(managers_).emplace_back(manager);
+#if CMK_SMP
+    // ensure all sleepers are reg'd
+    CmiNodeAllBarrier();
+#endif
+    return manager;
+  } else {
+#if CMK_SMP
+    // ensure all sleepers are reg'd
+    CmiNodeAllBarrier();
+#endif
+    return CsvAccess(managers_).back().get();
   }
 }
