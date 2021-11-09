@@ -65,7 +65,9 @@ struct CmiIpcManager : public ipc_metadata_ {
   std::map<int, int> fds;
 
   CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
-    if (this->mine == 0) {
+    auto firstPe = CmiNodeFirst(CmiMyNode());
+    auto thisRank = CmiPhysicalRank(firstPe);
+    if (thisRank == 0) {
       if (sendPid_(this) == 1) {
         openAllShared_(this);
         awakenSleepers_();

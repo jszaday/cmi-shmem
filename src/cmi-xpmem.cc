@@ -26,7 +26,7 @@ struct init_msg_ {
 
 // TODO ( detach xpmem segments at close )
 // ( not urgently needed since xpmem does it for us )
-struct ipc_xpmem_metadata_ : public ipc_metadata_ {
+struct CmiIpcManager : public ipc_metadata_ {
   // maps ranks to segments
   std::map<int, xpmem_segid_t> segments;
   // maps segments to xpmem apids
@@ -34,7 +34,9 @@ struct ipc_xpmem_metadata_ : public ipc_metadata_ {
   // number of physical peers
   int nPeers;
   // create our local shared data
-  ipc_xpmem_metadata_(void) { this->shared[this->mine] = makeIpcShared_(); }
+  CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
+    this->shared[this->mine] = makeIpcShared_();
+  }
 
   void put_segment(int proc, const xpmem_segid_t& segid) {
     auto ins = this->segments.emplace(proc, segid);
@@ -75,7 +77,7 @@ struct ipc_xpmem_metadata_ : public ipc_metadata_ {
   }
 };
 
-void* translateAddr_(ipc_xpmem_metadata_* meta, int proc, void* remote_ptr,
+void* translateAddr_(CmiIpcManager* meta, int proc, void* remote_ptr,
                      const std::size_t& size) {
   // TODO ( add support for SMP mode )
   if (proc == meta->mine) {
@@ -101,7 +103,7 @@ void* translateAddr_(ipc_xpmem_metadata_* meta, int proc, void* remote_ptr,
 
 static void handleInitialize_(void* msg) {
   auto* imsg = (init_msg_*)msg;
-  auto* meta = (ipc_xpmem_metadata_*)CsvAccess(metadata_).get();
+  auto* meta = (CmiIpcManager*)CsvAccess(metadata_).get();
   // extract the segment id and shared region
   // from the msg (registering it in our metadata)
   meta->put_segment(imsg->from, imsg->segid);
@@ -121,7 +123,7 @@ static void handleInitialize_(void* msg) {
   }
 }
 
-void CmiInitIpcMetadata(char** argv, CthThread th) {
+CmiIpcManager* CmiInitIpcMetadata(char** argv, CthThread th) {
   initSleepers_();
   initSegmentSize_(argv);
   CmiNodeAllBarrier();
@@ -133,13 +135,17 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
   CmiNodeAllBarrier();
 #endif
 
-  ipc_xpmem_metadata_* meta;
+  CmiIpcManager* meta;
   if (CmiMyRank() == 0) {
-    meta = new ipc_xpmem_metadata_();
-    CsvInitialize(ipc_metadata_ptr_, metadata_);
-    CsvAccess(metadata_).reset(meta);
+    CsvInitialize(ipc_manager_map_, managers_);
+    auto key = CsvAccess(managers_).size() + 1;
+    meta = new CmiIpcManager(key);
+    CsvAccess(managers_).emplace_back(manager);
   } else {
-    return;
+#if CMK_SMP
+    CmiNodeAllBarrier();
+#endif
+    return CsvAccess(managers_).back().get();
   }
 
   int* pes;
@@ -179,4 +185,10 @@ void CmiInitIpcMetadata(char** argv, CthThread th) {
     // single process -- wake up sleeping thread(s)
     awakenSleepers_();
   }
+
+#if CMK_SMP
+  CmiNodeAllBarrier();
+#endif
+
+  return meta;
 }
